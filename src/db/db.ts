@@ -217,6 +217,23 @@ export const MIGRATIONS: string[] = [
     at INTEGER NOT NULL
   );
   `,
+  // 4: US perspective sources, the New York Times and the Wall Street Journal. Only on an existing
+  // install: a fresh one gets them from the defaults (adding them here first would stop the
+  // defaults being seeded at all). Skipped if a source of that name is already there.
+  `
+  INSERT INTO source(name, adapter, endpoint, api_key_ref, role, lean, reader_mode, paywalled,
+                     include_sections, exclude_sections, refresh_minutes, enabled)
+  SELECT 'The New York Times', 'rss',
+         'https://rss.nytimes.com/services/xml/rss/nyt/World.xml' || char(10) || 'https://rss.nytimes.com/services/xml/rss/nyt/US.xml',
+         NULL, 'perspective', 'left', 'browser', 1, '[]', '[]', 30, 1
+   WHERE EXISTS (SELECT 1 FROM source) AND NOT EXISTS (SELECT 1 FROM source WHERE name = 'The New York Times');
+  INSERT INTO source(name, adapter, endpoint, api_key_ref, role, lean, reader_mode, paywalled,
+                     include_sections, exclude_sections, refresh_minutes, enabled)
+  SELECT 'The Wall Street Journal', 'rss',
+         'https://feeds.content.dowjones.io/public/rss/RSSWorldNews' || char(10) || 'https://feeds.content.dowjones.io/public/rss/RSSUSnews',
+         NULL, 'perspective', 'centre', 'browser', 1, '[]', '[]', 30, 1
+   WHERE EXISTS (SELECT 1 FROM source) AND NOT EXISTS (SELECT 1 FROM source WHERE name = 'The Wall Street Journal');
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

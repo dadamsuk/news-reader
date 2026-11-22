@@ -33,6 +33,21 @@ export const DEFAULT_SOURCES: SourceInput[] = [
     includeSections: [], excludeSections: [], refreshMinutes: 30, enabled: true,
   },
   {
+    // US: news pages are generally rated left of centre. Paywalled, so opened in the browser.
+    name: 'The New York Times', adapter: 'rss',
+    endpoint: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml\nhttps://rss.nytimes.com/services/xml/rss/nyt/US.xml',
+    apiKeyRef: null, role: 'perspective', lean: 'left', readerMode: 'browser', paywalled: true,
+    includeSections: [], excludeSections: [], refreshMinutes: 30, enabled: true,
+  },
+  {
+    // US: news pages are generally rated centre (its opinion pages lean right). The old
+    // feeds.a.dj.com feeds stopped in January 2025; these are the current Dow Jones ones.
+    name: 'The Wall Street Journal', adapter: 'rss',
+    endpoint: 'https://feeds.content.dowjones.io/public/rss/RSSWorldNews\nhttps://feeds.content.dowjones.io/public/rss/RSSUSnews',
+    apiKeyRef: null, role: 'perspective', lean: 'centre', readerMode: 'browser', paywalled: true,
+    includeSections: [], excludeSections: [], refreshMinutes: 30, enabled: true,
+  },
+  {
     name: 'The Telegraph', adapter: 'rss',
     endpoint: 'https://www.telegraph.co.uk/rss.xml\nhttps://www.telegraph.co.uk/news/rss.xml',
     apiKeyRef: null, role: 'perspective', lean: 'right', readerMode: 'browser', paywalled: true,

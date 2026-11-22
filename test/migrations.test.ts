@@ -1,3 +1,4 @@
+import { DEFAULT_SOURCES, listSources, seedDefaultSources } from '../src/core/sources';
 import { MIGRATIONS, migrate } from '../src/db/db';
 import { openNodeDb } from './helpers/nodeDb';
 
@@ -43,5 +44,31 @@ describe('migrations', () => {
     await migrate(db);
     expect((await db.get<{ endpoint: string }>('SELECT endpoint FROM source'))!.endpoint)
       .toBe('https://content.guardianapis.com/search?section=politics');
+  });
+
+  test('4: adds the NYT and WSJ to an existing install, once, and leaves a fresh install to the defaults', async () => {
+    const existing = openNodeDb();
+    for (let i = 0; i < 3; i++) await existing.exec(MIGRATIONS[i]);
+    await existing.exec('PRAGMA user_version = 3');
+    await existing.run(
+      `INSERT INTO source(name, adapter, endpoint, role, lean, reader_mode, paywalled, include_sections, exclude_sections, refresh_minutes, enabled)
+       VALUES('Guardian', 'guardian_content_api', 'https://content.guardianapis.com/search', 'primary', 'left', 'extract', 0, '[]', '[]', 30, 1)`,
+    );
+    await migrate(existing);
+    await migrate(existing); // a second run adds nothing
+    const added = (await listSources(existing)).filter((x) => x.name !== 'Guardian');
+    const nyt = DEFAULT_SOURCES.find((x) => x.name === 'The New York Times')!;
+    const wsj = DEFAULT_SOURCES.find((x) => x.name === 'The Wall Street Journal')!;
+    expect(added.map((x) => [x.name, x.endpoint, x.role, x.lean, x.readerMode, x.paywalled])).toEqual([
+      [nyt.name, nyt.endpoint, 'perspective', 'left', 'browser', true],
+      [wsj.name, wsj.endpoint, 'perspective', 'centre', 'browser', true],
+    ]);
+
+    const fresh = openNodeDb();
+    await migrate(fresh);
+    await seedDefaultSources(fresh);
+    const names = (await listSources(fresh)).map((x) => x.name);
+    expect(names).toHaveLength(DEFAULT_SOURCES.length); // every default, each once
+    expect(names).toEqual(expect.arrayContaining(['Guardian', 'The New York Times', 'The Wall Street Journal', 'BBC News']));
   });
 });
