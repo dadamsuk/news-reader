@@ -1,16 +1,21 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
-import React, { memo, useCallback, useRef } from 'react';
+import React, { memo, useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import type { FeedCard } from '../core/types';
 import { ageLabel } from '../core/util';
+import { SwipeRow } from './SwipeRow';
 import { useTheme, type Theme } from './theme';
 
 export interface CardHandlers {
   onOpen: (card: FeedCard) => void;
   onSave: (card: FeedCard) => void;
+  /** Thumbs-up: interested, but not reading or saving it. Tapping again takes it back. */
+  onInterested: (card: FeedCard) => void;
+  /** Thumbs-down: a general "not interested". The card goes. */
   onDismiss: (card: FeedCard) => void;
+  /** Swipe left: "Show me less like this, because…" (asks for the reason). */
+  onLessBecause: (card: FeedCard) => void;
   onMenu: (card: FeedCard) => void;
   onOpenSecond: (card: FeedCard) => void;
 }
@@ -23,44 +28,29 @@ function SwipeAction({ t, kind }: { t: Theme; kind: 'save' | 'dismiss' }) {
     <View style={[styles.action, { backgroundColor: save ? t.save : t.dismiss, alignItems: save ? 'flex-start' : 'flex-end' }]}>
       <View style={styles.actionInner}>
         <Ionicons name={save ? 'bookmark' : 'close-circle'} size={22} color="#fff" />
-        <Text style={styles.actionText}>{save ? 'Read later' : 'Not interested'}</Text>
+        <Text style={styles.actionText}>{save ? 'Read later' : 'Less like this…'}</Text>
       </View>
     </View>
   );
 }
 
-function ArticleCardBase({ card, now, handlers }: { card: FeedCard; now: number; handlers: CardHandlers }) {
+function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: number; handlers: CardHandlers; note?: string }) {
   const t = useTheme();
-  const ref = useRef<SwipeableMethods>(null);
   const a = card.article;
   const tone = a.tone ? TONE_LABEL[a.tone] : null;
 
-  const onSwipe = useCallback(
-    (direction: 'left' | 'right') => {
-      if (direction === 'right') {
-        // Swipe right saves; the card stays in place.
-        ref.current?.close();
-        handlers.onSave(card);
-      } else {
-        handlers.onDismiss(card);
-      }
-    },
-    [card, handlers],
-  );
+  // Swipe right saves (the card springs back and stays); swipe left asks what to see less of.
+  const onSwipeRight = useCallback(() => handlers.onSave(card), [card, handlers]);
+  const onSwipeLeft = useCallback(() => handlers.onLessBecause(card), [card, handlers]);
 
   return (
     <View style={styles.wrap}>
-      <ReanimatedSwipeable
-        ref={ref}
-        friction={1}
-        leftThreshold={72}
-        rightThreshold={72}
-        overshootLeft={false}
-        overshootRight={false}
-        renderLeftActions={() => <SwipeAction t={t} kind="save" />}
-        renderRightActions={() => <SwipeAction t={t} kind="dismiss" />}
-        onSwipeableOpen={onSwipe as any}
-        containerStyle={styles.swipeContainer}
+      <SwipeRow
+        onSwipeRight={onSwipeRight}
+        onSwipeLeft={onSwipeLeft}
+        renderRightSwipe={() => <SwipeAction t={t} kind="save" />}
+        renderLeftSwipe={() => <SwipeAction t={t} kind="dismiss" />}
+        style={styles.swipeContainer}
       >
         <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
           <Pressable
@@ -74,6 +64,15 @@ function ArticleCardBase({ card, now, handlers }: { card: FeedCard; now: number;
             style={styles.main}
           >
             <View style={styles.metaRow}>
+              <View
+                testID={`fit-${a.id}`}
+                accessible
+                accessibilityLabel={card.goodFit ? 'A good fit for you' : 'Shown because it is recent'}
+                style={[
+                  styles.fitDot,
+                  card.goodFit ? { backgroundColor: t.accent, borderColor: t.accent } : { borderColor: t.faint },
+                ]}
+              />
               <Text style={[styles.meta, { color: t.accent }]} numberOfLines={1}>
                 {(a.section ?? card.sourceName).toUpperCase()}
               </Text>
@@ -84,6 +83,27 @@ function ArticleCardBase({ card, now, handlers }: { card: FeedCard; now: number;
               ) : null}
               <Text style={[styles.age, { color: t.faint }]}>{ageLabel(a.publishedAt, now)}</Text>
               <View style={{ flex: 1 }} />
+              <Pressable
+                testID={`interested-${a.id}`}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={card.interested ? 'Take back: interested' : 'Interested'}
+                accessibilityState={{ selected: card.interested }}
+                onPress={() => handlers.onInterested(card)}
+                style={styles.metaButton}
+              >
+                <Ionicons name={card.interested ? 'thumbs-up' : 'thumbs-up-outline'} size={19} color={card.interested ? t.accent : t.faint} />
+              </Pressable>
+              <Pressable
+                testID={`dismiss-${a.id}`}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Not interested"
+                onPress={() => handlers.onDismiss(card)}
+                style={styles.metaButton}
+              >
+                <Ionicons name="thumbs-down-outline" size={19} color={t.faint} />
+              </Pressable>
               <Pressable
                 testID={`save-${a.id}`}
                 hitSlop={12}
@@ -126,8 +146,14 @@ function ArticleCardBase({ card, now, handlers }: { card: FeedCard; now: number;
               </Text>
             </Pressable>
           ) : null}
+          {note ? (
+            <View testID={`note-${a.id}`} style={[styles.strip, { backgroundColor: t.strip, borderTopColor: t.border }]}>
+              <Ionicons name="eye-off-outline" size={15} color={t.muted} style={{ marginTop: 2 }} />
+              <Text style={[styles.stripText, { color: t.muted }]}>{note}</Text>
+            </View>
+          ) : null}
         </View>
-      </ReanimatedSwipeable>
+      </SwipeRow>
     </View>
   );
 }
@@ -135,7 +161,7 @@ function ArticleCardBase({ card, now, handlers }: { card: FeedCard; now: number;
 export const ArticleCard = memo(
   ArticleCardBase,
   (p, n) =>
-    p.card === n.card && p.handlers === n.handlers && ageLabel(p.card.article.publishedAt, p.now) === ageLabel(n.card.article.publishedAt, n.now),
+    p.card === n.card && p.handlers === n.handlers && p.note === n.note && ageLabel(p.card.article.publishedAt, p.now) === ageLabel(n.card.article.publishedAt, n.now),
 );
 
 const styles = StyleSheet.create({
@@ -148,6 +174,9 @@ const styles = StyleSheet.create({
   tone: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, marginLeft: 8 },
   toneText: { fontSize: 10, fontWeight: '700' },
   age: { fontSize: 12, marginLeft: 8 },
+  metaButton: { marginRight: 18 },
+  // Filled: here because it fits. Hollow: here because it is recent (or an exploration pick).
+  fitDot: { width: 7, height: 7, borderRadius: 4, borderWidth: 1.2, marginRight: 7, opacity: 0.85 },
   bodyRow: { flexDirection: 'row', gap: 12 },
   title: { fontSize: 18, lineHeight: 23, fontWeight: '700', fontFamily: 'serif' },
   summary: { fontSize: 14, lineHeight: 20, marginTop: 6 },
@@ -155,7 +184,7 @@ const styles = StyleSheet.create({
   strip: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth },
   stripText: { flex: 1, fontSize: 13, lineHeight: 18 },
   stripSource: { fontWeight: '700' },
-  action: { width: '100%', justifyContent: 'center', paddingHorizontal: 22 },
+  action: { flex: 1, justifyContent: 'center', paddingHorizontal: 22 },
   actionInner: { alignItems: 'center', gap: 4 },
   actionText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 });

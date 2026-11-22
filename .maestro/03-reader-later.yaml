@@ -60,7 +60,8 @@ appId: net.dsc.newsreader
     id: "tab-history"
 - assertVisible: "Chancellor raises income tax threshold in autumn budget"
 
-# Swipe left: not interested. The card goes; undo brings it back.
+# Swipe left: "Show me less like this, because…". Cancel keeps the card; a reason removes it;
+# undo brings it back.
 - tapOn:
     id: "tab-feed"
 # The snackbar takes touches while it is up; let it go first.
@@ -72,6 +73,16 @@ appId: net.dsc.newsreader
     from:
       text: "NHS waiting list falls for third month in a row"
     direction: LEFT
+- assertVisible: "Show me less like this, because:"
+- tapOn:
+    id: "less-cancel"
+- assertVisible: "NHS waiting list falls for third month in a row"
+- swipe:
+    from:
+      text: "NHS waiting list falls for third month in a row"
+    direction: LEFT
+- tapOn:
+    id: "less-section"
 - assertVisible:
     id: "snackbar-action"
 - assertNotVisible: "NHS waiting list falls for third month in a row"

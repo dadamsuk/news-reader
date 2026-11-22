@@ -15,7 +15,8 @@ const NON_NEWS = ['sport', 'football', 'showbiz', 'tvshowbiz', 'celebrity', 'tv'
 
 export const DEFAULT_SOURCES: SourceInput[] = [
   {
-    name: 'Guardian', adapter: 'guardian_content_api', endpoint: 'https://content.guardianapis.com/search',
+    // production-office=-aus leaves out Guardian Australia (UK and US pieces stay).
+    name: 'Guardian', adapter: 'guardian_content_api', endpoint: 'https://content.guardianapis.com/search?production-office=-aus',
     apiKeyRef: 'source_key_guardian', role: 'primary', lean: 'left', readerMode: 'extract', paywalled: false,
     includeSections: [], excludeSections: ['crosswords', 'info', 'help', 'membership', 'guardian-masterclasses'],
     refreshMinutes: 30, enabled: true,

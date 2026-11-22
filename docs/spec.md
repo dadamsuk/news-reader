@@ -205,7 +205,7 @@ The model is deliberately simple and explainable: smoothed open rates per featur
 | More like this | Strong positive | +3 |
 | Read: scroll 60% or more, or 45 seconds or more on page | Positive | +1 |
 | Saved for later | Positive | +1 |
-| Opened but left within 10 seconds | Weak negative | -0.3 |
+| Opened but left within 3 seconds | Weak negative | -0.3 |
 | Shown, not opened | Weak negative | -0.2 |
 | Swiped away | Negative | -1 |
 | Less like this | Strong negative | -3 |

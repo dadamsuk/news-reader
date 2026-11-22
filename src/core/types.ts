@@ -3,8 +3,13 @@ export type Role = 'primary' | 'perspective';
 export type Lean = 'left' | 'centre-left' | 'centre' | 'centre-right' | 'right';
 export type ReaderMode = 'extract' | 'api_body' | 'browser';
 export type Tone = 'news' | 'comment' | 'analysis' | 'live';
-export type Surface = 'feed' | 'second_source' | 'digest';
-export type InteractionKind = 'open' | 'read' | 'save' | 'unsave' | 'dismiss' | 'more' | 'less' | 'bounce' | 'ignored';
+export type Surface = 'feed' | 'second_source' | 'digest' | 'bubble';
+export type InteractionKind =
+  | 'open' | 'read' | 'save' | 'unsave' | 'dismiss' | 'more' | 'less' | 'bounce' | 'ignored'
+  | 'interested' | 'less_source' | 'less_section' | 'less_topic';
+
+/** Why a swipe asked for less: one part of the article, not all of it. */
+export type LessReason = 'source' | 'section' | 'topic';
 
 export const ADAPTERS: AdapterType[] = ['guardian_content_api', 'rss', 'google_news_search'];
 export const ROLES: Role[] = ['primary', 'perspective'];
@@ -86,7 +91,23 @@ export interface FeedCard {
   explore: boolean;
   seenAt: number | null;
   saved: boolean;
+  /** Thumbs-up given: interested, though not reading or saving it. */
+  interested: boolean;
+  /** Preferences lifted it above the typical story on offer (false: it is here for being recent). */
+  goodFit: boolean;
   second: SecondSourceView | null;
+}
+
+/** A widely covered primary story that the learned ranking pushed far down the For you feed. */
+export interface BubbleItem {
+  card: FeedCard;
+  outletCount: number;
+  /** 0-based position among unseen stories with preferences applied. */
+  personalRank: number;
+  /** 0-based position among unseen stories on news value alone (freshness and coverage). */
+  neutralRank: number;
+  /** What pulled it down, most first, e.g. ['Sport', 'Rugby union']. */
+  reasons: string[];
 }
 
 export interface DigestOutlet {

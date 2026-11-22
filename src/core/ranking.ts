@@ -8,11 +8,38 @@ export const SIGNAL_WEIGHTS: Partial<Record<InteractionKind, number>> = {
   more: 3,
   read: 1,
   save: 1,
+  interested: 1,
   bounce: -0.3,
   ignored: -0.2,
   dismiss: -1,
   less: -3,
+  // Swipe left with a reason: the whole weight on one part of the article.
+  less_source: -3,
+  less_section: -3,
+  less_topic: -3,
 };
+
+/** Kinds that hide an article from the feeds. */
+export const HIDING_KINDS: InteractionKind[] = ['dismiss', 'less', 'less_source', 'less_section', 'less_topic'];
+
+const slug = (s: string) => s.toLowerCase().trim().replace(/\s+/g, '-');
+
+/**
+ * The feature keys a signal applies to. Most signals apply to every feature of the article; a
+ * swipe with a reason applies only to the part it names. "Topic" is the article's keywords, not
+ * the tag the Guardian adds for its section (that is the category).
+ */
+export function signalKeys(kind: InteractionKind, a: FeatureInput): string[] {
+  const keys = featureKeys(a);
+  if (kind === 'less_source') return keys.filter((k) => k.startsWith('source:'));
+  if (kind === 'less_section') return keys.filter((k) => k.startsWith('section:'));
+  if (kind === 'less_topic') {
+    const sectionTag = a.section ? `tag:${slug(a.section)}` : null;
+    const sectionName = a.section ? `tag:${norm(a.section)}` : null;
+    return keys.filter((k) => k.startsWith('tag:') && k !== sectionTag && k !== sectionName);
+  }
+  return keys;
+}
 
 export interface FeatureInput {
   sourceId: number;
@@ -139,6 +166,32 @@ export function coldFactor(settings: Settings, now: number): number {
   return now - start < settings.coldStartDays * DAY ? settings.coldStartFactor : 1;
 }
 
+/**
+ * The part of an article's score that comes from what has been learned (A and S), measured
+ * against an article with no history, so 0 means "preferences have no view of it".
+ */
+export function preferencePart(parts: { a: number; s: number }, settings: Settings, now: number): number {
+  const cold = coldFactor(settings, now);
+  return cold * (settings.weightA * (parts.a - BASELINE_RATIO) + settings.weightS * parts.s);
+}
+
+/** How far above the typical available story preferences must lift an article to call it a good fit. */
+export const GOOD_FIT_MARGIN = 0.05;
+
+/**
+ * Marks which articles are there because they fit, rather than because they are recent. Judged
+ * against the median of the articles on offer, not a fixed bar: embeddings of any two news stories
+ * are somewhat alike, so an absolute similarity would call almost everything a fit. With no
+ * learning yet every article scores alike and none is marked.
+ */
+export function goodFits(prefs: number[]): boolean[] {
+  if (!prefs.length) return [];
+  const sorted = prefs.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return prefs.map((p) => p - median > GOOD_FIT_MARGIN);
+}
+
 export function finalScore(
   parts: { a: number; s: number; i: number; publishedAt: number },
   settings: Settings,
@@ -161,7 +214,9 @@ async function bumpCentroid(db: Db, key: 'read' | 'dismissed', embedding: Float3
   if (prev && prev.length === embedding.length && row) {
     const f = decayFactor(now - row.updated_at);
     for (let i = 0; i < vec.length; i++) vec[i] = prev[i] * f + embedding[i] * w;
-    weight = row.weight * f + w;
+    weight = Math.max(0, row.weight * f + w);
+  } else if (w < 0) {
+    return; // nothing to take back
   } else {
     for (let i = 0; i < vec.length; i++) vec[i] = embedding[i] * w;
   }
@@ -172,16 +227,24 @@ async function bumpCentroid(db: Db, key: 'read' | 'dismissed', embedding: Float3
   );
 }
 
-/** Applies one learning signal for an article to the decayed feature stats and interest centroids. */
-export async function applySignal(db: Db, articleId: number, kind: InteractionKind, now: number): Promise<void> {
-  const w = SIGNAL_WEIGHTS[kind];
-  if (!w) return;
+/**
+ * Applies one learning signal for an article to the decayed feature stats and interest centroids.
+ * With `reverseOf` (when the signal was applied), takes it back instead: the same weight, decayed
+ * as it has been since, comes off again, so an undone signal leaves the model where it was.
+ */
+export async function applySignal(
+  db: Db, articleId: number, kind: InteractionKind, now: number, reverseOf?: number,
+): Promise<void> {
+  const base = SIGNAL_WEIGHTS[kind];
+  if (!base) return;
+  const reverse = reverseOf != null;
+  const w = reverse ? base * decayFactor(now - reverseOf) : base;
   const row = await db.get<any>(
     'SELECT source_id, section, tags, tone, byline, word_count, embedding FROM article WHERE id = ?',
     [articleId],
   );
   if (!row) return;
-  const keys = featureKeys({
+  const keys = signalKeys(kind, {
     sourceId: row.source_id, section: row.section, tags: safeJson<string[]>(row.tags, []),
     tone: row.tone, byline: row.byline, wordCount: row.word_count,
   });
@@ -194,8 +257,9 @@ export async function applySignal(db: Db, articleId: number, kind: InteractionKi
     for (const k of keys) {
       const r = byKey.get(k);
       const f = r ? decayFactor(now - r.updated_at) : 1;
-      const pos = (r?.positive_weight ?? 0) * f + (w > 0 ? w : 0);
-      const neg = (r?.negative_weight ?? 0) * f + (w < 0 ? -w : 0);
+      const sign = reverse ? -1 : 1;
+      const pos = Math.max(0, (r?.positive_weight ?? 0) * f + sign * (w > 0 ? w : 0));
+      const neg = Math.max(0, (r?.negative_weight ?? 0) * f + sign * (w < 0 ? -w : 0));
       await db.run(
         `INSERT INTO feature_stat(feature_key, positive_weight, negative_weight, updated_at) VALUES(?,?,?,?)
          ON CONFLICT(feature_key) DO UPDATE SET positive_weight = excluded.positive_weight,
@@ -205,8 +269,13 @@ export async function applySignal(db: Db, articleId: number, kind: InteractionKi
     }
     const emb = blobToVec(row.embedding);
     if (emb) {
-      if (w > 0) await bumpCentroid(db, 'read', emb, w, now);
-      else if (kind === 'dismiss' || kind === 'less') await bumpCentroid(db, 'dismissed', emb, -w, now);
+      const sign = reverse ? -1 : 1;
+      if (w > 0) await bumpCentroid(db, 'read', emb, sign * w, now);
+      // What the article is about counts against it only for a general no or a topic reason,
+      // not when the complaint is its source or its section.
+      else if (kind === 'dismiss' || kind === 'less' || kind === 'less_topic') {
+        await bumpCentroid(db, 'dismissed', emb, sign * -w, now);
+      }
     }
   });
 }
@@ -236,6 +305,43 @@ export async function scoreArticles(db: Db, now: number): Promise<number> {
     }
   });
   return rows.length;
+}
+
+/**
+ * The learned features that pull an article down most, in plain words, most first. Mirrors
+ * whyThis: each feature group is measured against one with no history, so only real dislikes show.
+ */
+export function lowerReasons(
+  a: FeatureInput, sourceName: string, stats: StatMap, sScore: number, settings: Settings, now: number, max = 2,
+): string[] {
+  const cold = coldFactor(settings, now);
+  const groups = featureGroups(a, sourceName);
+  const tagNames = new Map(a.tags.map((t) => [`tag:${norm(t)}`, t.trim()]));
+  const out: { text: string; value: number }[] = [];
+  for (const g of groups) {
+    const value = (settings.weightA * cold * (groupValue(g, stats) - BASELINE_RATIO)) / groups.length;
+    let text = g.label.replace(/^(Section|Source): /, '');
+    if (g.label === 'Topics') {
+      let worst = g.keys[0];
+      for (const k of g.keys) if (logRatio(stats.get(k)) < logRatio(stats.get(worst))) worst = k;
+      text = tagNames.get(worst) ?? worst.slice(4);
+    }
+    out.push({ text, value });
+  }
+  if (sScore < 0) out.push({ text: 'unlike what you usually read', value: settings.weightS * cold * sScore });
+  const seen = new Set<string>();
+  return out
+    .filter((r) => r.value < -0.005)
+    .sort((x, y) => x.value - y.value)
+    .filter((r) => {
+      // A section and its own tag (Guardian adds the section id as a tag) are one reason.
+      const k = r.text.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, max)
+    .map((r) => r.text);
 }
 
 export interface WhyLine {

@@ -1,9 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { whyThis, type WhyLine } from '../core/ranking';
-import type { FeedCard } from '../core/types';
+import type { FeedCard, LessReason } from '../core/types';
 import { getDb } from '../platform/db';
 import { getState, hideSnack, useStore } from '../state/store';
 import { useTheme } from './theme';
@@ -94,6 +94,69 @@ function CardMenuSheet({ card, onClose, actions }: { card: FeedCard; onClose: ()
   );
 }
 
+/** Keywords that make an article's topic, without the tag that only repeats its section. */
+export function topicLabels(card: FeedCard): string[] {
+  const sec = (card.article.section ?? '').toLowerCase().trim();
+  const secSlug = sec.replace(/\s+/g, '-');
+  return card.article.tags.filter((t) => {
+    const k = t.toLowerCase().trim();
+    return k && k !== sec && k !== secSlug;
+  });
+}
+
+/**
+ * Swipe left: "Show me less like this, because…". Each reason puts the whole negative on one part
+ * of the article. Source is offered only when there is more than one primary source, since For you
+ * shows nothing else.
+ */
+export function LessBecauseSheet({ card, onClose, onPick }: {
+  card: FeedCard | null; onClose: () => void; onPick: (card: FeedCard, reason: LessReason) => void;
+}) {
+  const t = useTheme();
+  const insets = useSafeAreaInsets();
+  const [primaries, setPrimaries] = useState(1);
+  useEffect(() => {
+    if (!card) return;
+    getDb()
+      .then((db) => db.get<{ n: number }>("SELECT COUNT(*) n FROM source WHERE role = 'primary' AND enabled = 1"))
+      .then((r) => setPrimaries(r?.n ?? 1))
+      .catch(() => {});
+  }, [card]);
+  if (!card) return null;
+  const topics = topicLabels(card).slice(0, 3);
+  const option = (reason: LessReason, icon: keyof typeof Ionicons.glyphMap, label: string, detail: string) => (
+    <Pressable
+      testID={`less-${reason}`}
+      accessibilityRole="button"
+      onPress={() => { onPick(card, reason); onClose(); }}
+      android_ripple={{ color: t.border }}
+      style={styles.menuItem}
+    >
+      <Ionicons name={icon} size={20} color={t.text} />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.menuLabel, { color: t.text }]}>{label}</Text>
+        <Text style={{ color: t.muted, fontSize: 13, marginTop: 2 }} numberOfLines={1}>{detail}</Text>
+      </View>
+    </Pressable>
+  );
+  return (
+    <Modal transparent animationType="fade" visible onRequestClose={onClose} statusBarTranslucent>
+      <Pressable testID="less-backdrop" style={styles.backdrop} onPress={onClose} accessibilityLabel="Cancel" />
+      <View testID="less-sheet" style={[styles.sheet, { backgroundColor: t.card, paddingBottom: insets.bottom + 10 }]}>
+        <Text style={[styles.sheetHeading, { color: t.text }]}>Show me less like this, because:</Text>
+        <Text style={[styles.sheetTitle, { color: t.muted }]} numberOfLines={2}>{card.article.title}</Text>
+        {primaries > 1 ? option('source', 'newspaper-outline', 'Less from this source', card.sourceName) : null}
+        {card.article.section ? option('section', 'folder-outline', 'Less from this category', card.article.section) : null}
+        {option('topic', 'pricetag-outline', 'Less on this topic', topics.length ? topics.join(', ') : 'What this story is about')}
+        <Pressable testID="less-cancel" accessibilityRole="button" onPress={onClose} android_ripple={{ color: t.border }} style={styles.menuItem}>
+          <Ionicons name="close" size={20} color={t.muted} />
+          <Text style={[styles.menuLabel, { color: t.muted }]}>Cancel</Text>
+        </Pressable>
+      </View>
+    </Modal>
+  );
+}
+
 export function BudgetBanner() {
   const t = useTheme();
   const over = useStore((s) => s.overBudget);
@@ -120,6 +183,7 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 14 },
   sheetTitle: { fontSize: 13, paddingHorizontal: 20, paddingBottom: 10, lineHeight: 18 },
+  sheetHeading: { fontSize: 17, fontWeight: '700', paddingHorizontal: 20, paddingBottom: 4 },
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingVertical: 15 },
   menuLabel: { fontSize: 16 },
   why: { marginHorizontal: 16, marginBottom: 6, borderRadius: 10, padding: 12, gap: 6 },

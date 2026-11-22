@@ -195,8 +195,11 @@ describe('actions', () => {
   test('what counts as read, bounced or neither', () => {
     expect(classifyReading(50, 10)).toBe('read');
     expect(classifyReading(20, 60)).toBe('read');
-    expect(classifyReading(5, 20)).toBe('bounce');
-    expect(classifyReading(3, 100)).toBe('bounce'); // one-screen article glanced at
+    expect(classifyReading(2, 20)).toBe('bounce');
+    expect(classifyReading(2.9, 100)).toBe('bounce'); // one-screen article glanced at
+    expect(classifyReading(3, 20)).toBeNull(); // 3 seconds is no longer a bounce
+    expect(classifyReading(4, 100)).toBeNull(); // too quick to be read, too long to be a bounce
+    expect(classifyReading(5, 20)).toBeNull();
     expect(classifyReading(20, 30)).toBeNull();
   });
 });

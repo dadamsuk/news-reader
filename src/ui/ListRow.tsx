@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
-import React, { memo, useRef } from 'react';
+import React, { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import type { ListRow as Row } from '../core/feed';
 import { ageLabel } from '../core/util';
+import { SwipeRow } from './SwipeRow';
 import { useTheme } from './theme';
 
 /** Compact article row for Read later and History. Swiping (when enabled) marks it done. */
@@ -15,7 +15,6 @@ function ListRowBase({
   whenLabel: string; testID: string;
 }) {
   const t = useTheme();
-  const ref = useRef<SwipeableMethods>(null);
   const a = row.article;
   const content = (
     <Pressable
@@ -53,20 +52,15 @@ function ListRowBase({
   );
   return (
     <View style={styles.wrap}>
-      <ReanimatedSwipeable
-        ref={ref}
-        friction={1}
-        leftThreshold={72}
-        rightThreshold={72}
-        overshootLeft={false}
-        overshootRight={false}
-        renderLeftActions={() => action('flex-start')}
-        renderRightActions={() => action('flex-end')}
-        onSwipeableOpen={() => onSwipe(row)}
-        containerStyle={styles.swipe}
+      <SwipeRow
+        onSwipeRight={() => onSwipe(row)}
+        onSwipeLeft={() => onSwipe(row)}
+        renderRightSwipe={() => action('flex-start')}
+        renderLeftSwipe={() => action('flex-end')}
+        style={styles.swipe}
       >
         {content}
-      </ReanimatedSwipeable>
+      </SwipeRow>
     </View>
   );
 }
@@ -81,6 +75,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, lineHeight: 21, fontWeight: '700', fontFamily: 'serif' },
   offline: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
   thumb: { width: 68, height: 68, borderRadius: 8 },
-  action: { width: '100%', justifyContent: 'center', paddingHorizontal: 22, gap: 3 },
+  action: { flex: 1, justifyContent: 'center', paddingHorizontal: 22, gap: 3 },
   actionText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 });

@@ -1,9 +1,10 @@
 import {
   BLOCK_SIZE, EXPLORE_SLOTS, buildFeedOrder, ensureSession, loadFeed, moreLikeThis, recordImpressions,
-  scoreIgnoredImpressions, dismiss, type RankItem,
+  scoreIgnoredImpressions, dismiss, lessBecause, lessLikeThis, markInterested, undoDismiss, undoLess, undoLessBecause,
+  unmarkInterested, type RankItem,
 } from '../src/core/feed';
 import {
-  BASELINE_RATIO, affinity, applySignal, coldFactor, finalScore, freshness, importance, loadStats, resetLearning,
+  BASELINE_RATIO, affinity, applySignal, coldFactor, finalScore, freshness, goodFits, importance, loadStats, resetLearning,
   scoreArticles, whyThis, featureKeys,
 } from '../src/core/ranking';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../src/core/settings';
@@ -164,6 +165,26 @@ describe('learning', () => {
     expect(why.map((w) => w.text)).toContain('Section: Science');
   });
 
+  test('good fit: marked only when preferences lift a card clearly above the typical story', async () => {
+    expect(goodFits([0, 0, 0, 0])).toEqual([false, false, false, false]); // nothing learned yet
+    expect(goodFits([0.5, 0.02, 0, -0.4, 0.01])).toEqual([true, false, false, false, false]);
+
+    const s = await learningWorld();
+    let { sessionId } = await ensureSession(s.db, s.world.now);
+    const cold = await loadFeed(s.db, await loadSettings(s.db), sessionId, s.world.now);
+    expect(cold.filter((c) => c.goodFit)).toHaveLength(0);
+
+    const science = cold.filter((c) => c.article.section === 'Science');
+    for (const c of science.slice(0, 10)) await moreLikeThis(s.db, c.article.id, s.world.now);
+    s.world.now += 60_000;
+    await s.run('open');
+    ({ sessionId } = await ensureSession(s.db, s.world.now, true));
+    const after = await loadFeed(s.db, await loadSettings(s.db), sessionId, s.world.now);
+    const fitSections = new Set(after.filter((c) => c.goodFit).map((c) => c.article.section));
+    expect(fitSections).toEqual(new Set(['Science']));
+    expect(after.filter((c) => c.article.section !== 'Science').every((c) => !c.goodFit)).toBe(true);
+  });
+
   test('Reset learning returns ranking to cold-start behaviour', async () => {
     const s = await learningWorld();
     let { sessionId } = await ensureSession(s.db, s.world.now);
@@ -211,5 +232,96 @@ describe('learning', () => {
     // Applying another signal folds the decay in.
     await applySignal(s.db, a, 'read', s.world.now + 30 * DAY);
     expect((await loadStats(s.db, s.world.now + 30 * DAY)).get('section:politics')!.pos).toBeCloseTo(2.5);
+  });
+});
+
+describe('card feedback', () => {
+  test('Interested (thumbs-up) is +1, counts once, and taking it back restores the model', async () => {
+    const s = await setup([]);
+    s.world.addGuardian([{ title: 'Liked story', topic: 1, section: 'Science', hoursAgo: 1, tags: ['space'] }]);
+    await s.run();
+    const { id } = (await s.db.get<{ id: number }>("SELECT id FROM article WHERE title = 'Liked story'"))!;
+    const snapshot = async () => {
+      const stats = await loadStats(s.db, s.world.now);
+      const c = await s.db.get<{ weight: number }>("SELECT weight FROM centroid WHERE key = 'read'");
+      return { science: stats.get('section:science')?.pos ?? 0, space: stats.get('tag:space')?.pos ?? 0, centroid: c?.weight ?? 0 };
+    };
+    const before = await snapshot();
+
+    await markInterested(s.db, id, s.world.now);
+    await markInterested(s.db, id, s.world.now); // a second tap adds nothing
+    const liked = await snapshot();
+    expect(liked.science).toBeCloseTo(before.science + 1);
+    expect(liked.centroid).toBeCloseTo(before.centroid + 1);
+
+    s.world.now += 5 * DAY;
+    await unmarkInterested(s.db, id, s.world.now);
+    const after = await snapshot();
+    expect(after.science).toBeCloseTo(before.science * decayFactor(5 * DAY));
+    expect(after.space).toBeCloseTo(0);
+    expect(after.centroid).toBeCloseTo(0);
+  });
+
+  test('swipe "less, because": the whole -3 lands on the part named, the card goes, UNDO reverses it', async () => {
+    const s = await setup([]);
+    s.world.addGuardian([
+      { title: 'Cat story', topic: 1, section: 'Sport', hoursAgo: 1, tags: ['sport', 'Rugby union', 'Six Nations'] },
+      { title: 'Topic story', topic: 2, section: 'Sport', hoursAgo: 1, tags: ['sport', 'Cricket'] },
+    ]);
+    await s.run();
+    const id = async (t: string) => (await s.db.get<{ id: number }>('SELECT id FROM article WHERE title = ?', [t]))!.id;
+    const neg = async (k: string) => (await loadStats(s.db, s.world.now)).get(k)?.neg ?? 0;
+    const dismissedWeight = async () => (await s.db.get<{ weight: number }>("SELECT weight FROM centroid WHERE key = 'dismissed'"))?.weight ?? 0;
+    const { sessionId } = await ensureSession(s.db, s.world.now);
+    const cat = await id('Cat story');
+    const topic = await id('Topic story');
+
+    await lessBecause(s.db, cat, 'section', sessionId, s.world.now);
+    expect(await neg('section:sport')).toBeCloseTo(3);
+    expect(await neg('tag:rugby union')).toBeCloseTo(0);
+    expect(await dismissedWeight()).toBeCloseTo(0); // a category complaint is not about the story's subject
+
+    await lessBecause(s.db, topic, 'topic', sessionId, s.world.now);
+    expect(await neg('tag:cricket')).toBeCloseTo(3);
+    expect(await neg('tag:sport')).toBeCloseTo(0); // the section's own tag belongs to the category
+    expect(await neg('section:sport')).toBeCloseTo(3); // unchanged by the topic reason
+    expect(await dismissedWeight()).toBeCloseTo(3);
+    const titles = async () => (await loadFeed(s.db, await loadSettings(s.db), sessionId, s.world.now)).map((c) => c.article.title);
+    expect(await titles()).toEqual([]);
+
+    await undoLessBecause(s.db, cat, 'section', s.world.now);
+    await undoLessBecause(s.db, topic, 'topic', s.world.now);
+    expect(await neg('section:sport')).toBeCloseTo(0);
+    expect(await neg('tag:cricket')).toBeCloseTo(0);
+    expect(await dismissedWeight()).toBeCloseTo(0);
+    expect((await titles()).sort()).toEqual(['Cat story', 'Topic story']);
+  });
+
+  test('Less like this (menu) is -3, Not interested (thumbs-down) is -1; both hide the card, and UNDO reverses either', async () => {
+    const s = await setup([]);
+    s.world.addGuardian([
+      { title: 'Down story', topic: 1, section: 'Sport', hoursAgo: 1, tags: ['rugby'] },
+      { title: 'Swiped story', topic: 2, section: 'Culture', hoursAgo: 1, tags: ['opera'] },
+    ]);
+    await s.run();
+    const id = async (t: string) => (await s.db.get<{ id: number }>('SELECT id FROM article WHERE title = ?', [t]))!.id;
+    const neg = async (k: string) => (await loadStats(s.db, s.world.now)).get(k)?.neg ?? 0;
+    const { sessionId } = await ensureSession(s.db, s.world.now);
+    const down = await id('Down story');
+    const swiped = await id('Swiped story');
+
+    await lessLikeThis(s.db, down, sessionId, s.world.now);
+    await lessLikeThis(s.db, down, sessionId, s.world.now); // counts once
+    await dismiss(s.db, swiped, sessionId, s.world.now);
+    expect(await neg('section:sport')).toBeCloseTo(3);
+    expect(await neg('section:culture')).toBeCloseTo(1);
+    const titles = async () => (await loadFeed(s.db, await loadSettings(s.db), sessionId, s.world.now)).map((c) => c.article.title);
+    expect(await titles()).toEqual([]);
+
+    await undoLess(s.db, down, s.world.now);
+    await undoDismiss(s.db, swiped, s.world.now);
+    expect(await neg('section:sport')).toBeCloseTo(0);
+    expect(await neg('tag:opera')).toBeCloseTo(0);
+    expect((await titles()).sort()).toEqual(['Down story', 'Swiped story']);
   });
 });

@@ -160,6 +160,22 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX decision_kind_at ON decision_log(kind, at);
   `,
+  // 2: the Guardian without Guardian Australia (production office "aus"). Pieces from it already
+  // fetched but never seen, saved or acted on are dropped; anything in History stays.
+  `
+  UPDATE source SET endpoint = 'https://content.guardianapis.com/search?production-office=-aus'
+   WHERE adapter = 'guardian_content_api' AND endpoint = 'https://content.guardianapis.com/search';
+  CREATE TEMP TABLE drop_aus AS
+    SELECT a.id FROM article a JOIN source s ON s.id = a.source_id AND s.adapter = 'guardian_content_api'
+     WHERE a.tags LIKE '%"australia-news"%'
+       AND a.id NOT IN (SELECT article_id FROM impression)
+       AND a.id NOT IN (SELECT article_id FROM read_later)
+       AND a.id NOT IN (SELECT article_id FROM interaction);
+  DELETE FROM second_source WHERE primary_article_id IN (SELECT id FROM drop_aus) OR other_article_id IN (SELECT id FROM drop_aus);
+  DELETE FROM match_pair WHERE primary_article_id IN (SELECT id FROM drop_aus) OR other_article_id IN (SELECT id FROM drop_aus);
+  DELETE FROM article WHERE id IN (SELECT id FROM drop_aus);
+  DROP TABLE drop_aus;
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

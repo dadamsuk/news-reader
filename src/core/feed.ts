@@ -1,11 +1,11 @@
 import type { Db } from '../db/db';
 import { placeholders } from '../db/db';
-import { applySignal, finalScore } from './ranking';
+import { HIDING_KINDS, applySignal, finalScore, goodFits, loadStats, lowerReasons, preferencePart } from './ranking';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { isRightLeaning } from './sources';
 import {
   DAY, HOUR,
-  type Article, type DigestItem, type FeedCard, type InteractionKind, type Lean, type Surface,
+  type Article, type BubbleItem, type DigestItem, type FeedCard, type InteractionKind, type Lean, type LessReason, type Surface,
 } from './types';
 import { hashString, mulberry32, safeJson } from './util';
 
@@ -190,14 +190,15 @@ async function seenClusters(db: Db, sessionId: string, now: number): Promise<Set
 export async function loadFeed(db: Db, settings: Settings, sessionId: string, now: number): Promise<FeedCard[]> {
   const rows = await db.all<any>(
     `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at seen_at,
-            (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved
+            (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
+            EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested
      FROM article a
      JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN read_later rl ON rl.article_id = a.id
      WHERE a.ready_at IS NOT NULL
-       AND ((i.article_id IS NULL AND a.published_at > ?) OR i.session_id = ?)
-       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN ('dismiss','less'))`,
+       AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface != 'bubble'))
+       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`,
     [now - FEED_WINDOW_MS, sessionId],
   );
   const cards = new Map<number, FeedCard>();
@@ -210,10 +211,14 @@ export async function loadFeed(db: Db, settings: Settings, sessionId: string, no
       explore: false,
       seenAt: r.seen_at ?? null,
       saved: !!r.saved,
+      interested: !!r.interested,
+      goodFit: false,
       second: null,
     });
   }
   const all = Array.from(cards.values());
+  const fits = goodFits(all.map((c) => preferencePart({ a: c.article.scoreA, s: c.article.scoreS }, settings, now)));
+  all.forEach((c, i) => { c.goodFit = fits[i]; });
   const seen = all.filter((c) => c.seenAt != null).sort((a, b) => a.seenAt! - b.seenAt! || a.article.id - b.article.id);
   const unseen = all.filter((c) => c.seenAt == null).sort((a, b) => b.score - a.score).slice(0, FEED_LIMIT);
 
@@ -326,6 +331,106 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
   return [...seen, ...unseen];
 }
 
+// ---------- outside your bubble ----------
+
+/** Distinct outlets (primary included) a story needs to count as widely covered. */
+export const BUBBLE_MIN_OUTLETS = 3;
+/** On news value alone it would be within this many places of the top. */
+export const BUBBLE_NEUTRAL_TOP = 30;
+/** Preferences must push it at least this many places further down. */
+export const BUBBLE_MIN_DROP = 20;
+export const BUBBLE_LIMIT = 20;
+
+/**
+ * Outside your bubble: widely covered stories from the primary sources that the learned ranking
+ * pushed far down For you. Each unseen story is ranked twice, with preferences (as For you does)
+ * and on news value alone (freshness and coverage); a story qualifies when it is widely covered,
+ * near the top on news value, and well down with preferences. Stories dismissed or marked "less
+ * like this" never qualify. Seen rule as elsewhere: cards seen here this session keep their place,
+ * and anything seen anywhere in an earlier session is gone.
+ */
+export async function loadBubble(db: Db, settings: Settings, sessionId: string, now: number): Promise<BubbleItem[]> {
+  const rows = await db.all<any>(
+    `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at seen_at, i.surface seen_surface,
+            COALESCE(c.outlet_count, 1) outlets,
+            (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
+            EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested
+     FROM article a
+     JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
+     LEFT JOIN cluster c ON c.id = a.cluster_id
+     LEFT JOIN impression i ON i.article_id = a.id
+     LEFT JOIN read_later rl ON rl.article_id = a.id
+     WHERE a.ready_at IS NOT NULL
+       AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface = 'bubble'))
+       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`,
+    [now - FEED_WINDOW_MS, sessionId],
+  );
+  const neutralSettings = { ...settings, weightA: 0, weightS: 0 };
+  const all = rows.map((r) => {
+    const article = rowToArticle(r);
+    const parts = { a: article.scoreA, s: article.scoreS, i: article.scoreI, publishedAt: article.publishedAt };
+    return {
+      r,
+      article,
+      personal: finalScore(parts, settings, now),
+      neutral: finalScore(parts, neutralSettings, now),
+      goodFit: false,
+    };
+  });
+  // Judged against the same pool For you draws from, so a card shows the same mark in both tabs.
+  const fits = goodFits(all.map((x) => preferencePart({ a: x.article.scoreA, s: x.article.scoreS }, settings, now)));
+  all.forEach((x, i) => { x.goodFit = fits[i]; });
+  // Ranks are taken over the unseen pool, which is what For you orders.
+  const unseen = all.filter((x) => x.r.seen_at == null);
+  const tie = (a: (typeof all)[number], b: (typeof all)[number]) => b.article.publishedAt - a.article.publishedAt || a.article.id - b.article.id;
+  const personalRank = new Map(unseen.slice().sort((a, b) => b.personal - a.personal || tie(a, b)).map((x, i) => [x.article.id, i]));
+  const neutralRank = new Map(unseen.slice().sort((a, b) => b.neutral - a.neutral || tie(a, b)).map((x, i) => [x.article.id, i]));
+
+  const stats = await loadStats(db, now);
+  const toItem = (x: (typeof all)[number], pr: number, nr: number): BubbleItem => ({
+    card: {
+      article: x.article,
+      sourceName: x.r.source_name,
+      score: x.personal,
+      explore: false,
+      seenAt: x.r.seen_at ?? null,
+      saved: !!x.r.saved,
+      interested: !!x.r.interested,
+      goodFit: !!x.goodFit,
+      second: null,
+    },
+    outletCount: x.r.outlets,
+    personalRank: pr,
+    neutralRank: nr,
+    reasons: lowerReasons(
+      { sourceId: x.article.sourceId, section: x.article.section, tags: x.article.tags, tone: x.article.tone,
+        byline: x.article.byline, wordCount: x.article.wordCount },
+      x.r.source_name, stats, x.article.scoreS, settings, now,
+    ),
+  });
+
+  const fresh: BubbleItem[] = [];
+  for (const x of unseen) {
+    const pr = personalRank.get(x.article.id)!;
+    const nr = neutralRank.get(x.article.id)!;
+    if (x.r.outlets < BUBBLE_MIN_OUTLETS) continue;
+    if (nr >= BUBBLE_NEUTRAL_TOP) continue;
+    if (pr - nr < BUBBLE_MIN_DROP) continue;
+    if (x.personal >= x.neutral) continue; // pushed down by others rising, not by its own features
+    fresh.push(toItem(x, pr, nr));
+  }
+  fresh.sort((a, b) =>
+    b.outletCount - a.outletCount ||
+    (b.personalRank - b.neutralRank) - (a.personalRank - a.neutralRank) ||
+    b.card.article.publishedAt - a.card.article.publishedAt);
+  // Seen here this session: kept in the order seen. They have left the unseen pool, so they have no rank (-1).
+  const seen = all
+    .filter((x) => x.r.seen_at != null)
+    .sort((a, b) => a.r.seen_at - b.r.seen_at)
+    .map((x) => toItem(x, personalRank.get(x.article.id) ?? -1, neutralRank.get(x.article.id) ?? -1));
+  return [...seen, ...fresh.slice(0, BUBBLE_LIMIT)];
+}
+
 // ---------- interactions ----------
 
 async function logInteraction(
@@ -345,12 +450,13 @@ export async function recordOpen(db: Db, articleId: number, sessionId: string, s
 
 export const READ_SCROLL_PCT = 60;
 export const READ_SECONDS = 45;
-export const BOUNCE_SECONDS = 10;
+export const BOUNCE_SECONDS = 3;
 export const DONE_SCROLL_PCT = 70;
 
 /** What leaving the reader means for learning: read, bounced, or nothing. */
 export function classifyReading(dwellSeconds: number, maxScrollPct: number): 'read' | 'bounce' | null {
-  // A short piece fits on one screen and reports 100% at once, so a glance of under 5 seconds is still a bounce.
+  // A short piece fits on one screen and reports 100% at once, so it needs 5 seconds to count as read;
+  // under 3 seconds is a bounce whatever the scroll depth.
   if (dwellSeconds >= READ_SECONDS || (maxScrollPct >= READ_SCROLL_PCT && dwellSeconds >= 5)) return 'read';
   if (dwellSeconds < BOUNCE_SECONDS) return 'bounce';
   return null;
@@ -407,19 +513,68 @@ export async function dismiss(db: Db, articleId: number, sessionId: string, now:
   await applySignal(db, articleId, 'dismiss', now);
 }
 
-export async function undoDismiss(db: Db, articleId: number): Promise<void> {
-  await db.run("DELETE FROM interaction WHERE article_id = ? AND kind = 'dismiss'", [articleId]);
+/** Takes back every signal of one kind for an article, reversing what it taught the model. */
+async function takeBack(db: Db, articleId: number, kind: InteractionKind, now: number): Promise<void> {
+  const row = await db.get<{ at: number | null }>('SELECT MIN(at) at FROM interaction WHERE article_id = ? AND kind = ?', [articleId, kind]);
+  if (row?.at == null) return;
+  await db.run('DELETE FROM interaction WHERE article_id = ? AND kind = ?', [articleId, kind]);
+  await applySignal(db, articleId, kind, now, row.at);
 }
 
+export async function undoDismiss(db: Db, articleId: number, now = Date.now()): Promise<void> {
+  await takeBack(db, articleId, 'dismiss', now);
+}
+
+/** More like this (long-press menu): the strongest positive signal. Counts once per article. */
 export async function moreLikeThis(db: Db, articleId: number, now: number): Promise<void> {
+  if (await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'more'", [articleId])) return;
   await logInteraction(db, articleId, 'more', now);
   await applySignal(db, articleId, 'more', now);
 }
 
+/**
+ * Interested (the card's thumbs-up): "I like this, but I am not going to read it". Worth the same
+ * as reading or saving it. Counts once per article; tapping again takes it back.
+ */
+export async function markInterested(db: Db, articleId: number, now: number): Promise<void> {
+  if (await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'interested'", [articleId])) return;
+  await logInteraction(db, articleId, 'interested', now);
+  await applySignal(db, articleId, 'interested', now);
+}
+
+export async function unmarkInterested(db: Db, articleId: number, now: number): Promise<void> {
+  await takeBack(db, articleId, 'interested', now);
+}
+
+const LESS_KIND: Record<LessReason, InteractionKind> = { source: 'less_source', section: 'less_section', topic: 'less_topic' };
+
+/**
+ * Swipe left, "Show me less like this, because": the full -3 on the one part named (its source,
+ * its category or its topics) rather than spread over the whole article. The card goes.
+ */
+export async function lessBecause(db: Db, articleId: number, reason: LessReason, sessionId: string, now: number): Promise<void> {
+  const kind = LESS_KIND[reason];
+  await recordImpressions(db, [{ articleId, surface: 'feed' }], sessionId, now);
+  if (await db.get('SELECT 1 x FROM interaction WHERE article_id = ? AND kind = ?', [articleId, kind])) return;
+  await logInteraction(db, articleId, kind, now);
+  await applySignal(db, articleId, kind, now);
+}
+
+export async function undoLessBecause(db: Db, articleId: number, reason: LessReason, now: number): Promise<void> {
+  await takeBack(db, articleId, LESS_KIND[reason], now);
+}
+
+/** Less like this (long-press menu): the strongest general negative, -3 on everything about it. The card goes. */
 export async function lessLikeThis(db: Db, articleId: number, sessionId: string, now: number): Promise<void> {
   await recordImpressions(db, [{ articleId, surface: 'feed' }], sessionId, now);
+  if (await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'less'", [articleId])) return;
   await logInteraction(db, articleId, 'less', now);
   await applySignal(db, articleId, 'less', now);
+}
+
+/** Undo for Less like this: the card comes back and the signal is reversed. */
+export async function undoLess(db: Db, articleId: number, now: number): Promise<void> {
+  await takeBack(db, articleId, 'less', now);
 }
 
 // ---------- read later & history ----------
