@@ -5,6 +5,7 @@ import type { FetchFn, StepResult } from '../core/types';
 import { errMsg, mapLimit, safeJson } from '../core/util';
 import type { Db } from '../db/db';
 import { ensureBody, type Files } from '../reader/body';
+import { stepBriefing, stepStories } from './extras';
 import {
   stepCluster, stepDigest, stepEmbed, stepFetch, stepRetention, stepSecondSources, type StepDeps,
 } from './steps';
@@ -183,6 +184,16 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   });
   // Right press does not touch For you, so it runs after the new cards are already showing.
   await step('7 Right press', () => stepDigest(d));
+  await step('7b Followed stories', () => stepStories(d));
+  await step('7c Briefing', async () => {
+    const info = await stepBriefing(d);
+    if (info !== 'not due') {
+      try {
+        deps.onArticlesReady?.();
+      } catch {}
+    }
+    return info;
+  });
   await step('8 Prefetch', () => prefetch(deps, d));
   await step('9 Retention', () => stepRetention(d, deps.files ? (ids) => deps.files!.removeArticles(ids) : undefined));
 

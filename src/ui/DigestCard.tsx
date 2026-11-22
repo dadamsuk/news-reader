@@ -7,8 +7,8 @@ import { ageLabel } from '../core/util';
 import { useTheme } from './theme';
 
 function DigestCardBase({
-  item, now, onOpenOutlet,
-}: { item: DigestItem; now: number; onOpenOutlet: (o: DigestOutlet) => void }) {
+  item, now, onOpenOutlet, onCoverage,
+}: { item: DigestItem; now: number; onOpenOutlet: (o: DigestOutlet) => void; onCoverage?: (item: DigestItem) => void }) {
   const t = useTheme();
   return (
     <View style={styles.wrap}>
@@ -44,13 +44,25 @@ function DigestCardBase({
               <Ionicons name="open-outline" size={16} color={t.faint} />
             </Pressable>
           ))}
+          {onCoverage ? (
+            <Pressable
+              testID={`digest-coverage-${item.clusterId}`}
+              accessibilityRole="button"
+              onPress={() => onCoverage(item)}
+              android_ripple={{ color: t.border }}
+              style={styles.outlet}
+            >
+              <Ionicons name="albums-outline" size={15} color={t.muted} />
+              <Text style={{ color: t.muted, fontSize: 13, fontWeight: '600' }}>Full coverage: compare or follow</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </View>
   );
 }
 
-export const DigestCard = memo(DigestCardBase, (p, n) => p.item === n.item && p.onOpenOutlet === n.onOpenOutlet);
+export const DigestCard = memo(DigestCardBase, (p, n) => p.item === n.item && p.onOpenOutlet === n.onOpenOutlet && p.onCoverage === n.onCoverage);
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: 12, paddingBottom: 12 },

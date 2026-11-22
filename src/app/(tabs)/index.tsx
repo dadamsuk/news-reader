@@ -1,17 +1,25 @@
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   dismiss, lessBecause, lessLikeThis, loadBubble, loadDigest, loadFeed, markInterested, moreLikeThis, saveForLater,
   undoDismiss, undoLess, undoLessBecause, unmarkInterested, unsave,
 } from '../../core/feed';
-import type { BubbleItem, DigestItem, DigestOutlet, FeedCard, LessReason, Surface } from '../../core/types';
+import { dismissBriefing, loadBriefing } from '../../core/briefing';
+import { followStory, loadStories, storyOfArticle } from '../../core/stories';
+import type {
+  Briefing, BriefingItem, BubbleItem, DigestItem, DigestOutlet, FeedCard, LessReason, StoryView, Surface,
+} from '../../core/types';
+import { errMsg } from '../../core/util';
 import { getDb } from '../../platform/db';
 import { openArticle } from '../../platform/open';
 import { bodyDeps, launchedIntoFeed, runRefresh, startSession } from '../../platform/runner';
 import { ensureBody } from '../../reader/body';
 import { APP_START, getState, setState, showSnack, useStore } from '../../state/store';
 import { ArticleCard, type CardHandlers } from '../../ui/ArticleCard';
+import { BriefingCard } from '../../ui/BriefingCard';
+import { StoryCard } from '../../ui/StoryCard';
 import { DigestCard } from '../../ui/DigestCard';
 import { Button, Empty } from '../../ui/kit';
 import { BudgetBanner, CardMenu, LessBecauseSheet, topicLabels } from '../../ui/overlays';
@@ -21,7 +29,7 @@ import { useTheme } from '../../ui/theme';
 const AUDIT = !!Constants.expoConfig?.extra?.e2e;
 const LIST_PADDING_TOP = 12;
 
-type Tab = 'foryou' | 'right' | 'bubble';
+type Tab = 'foryou' | 'right' | 'bubble' | 'following';
 
 /** The strip under an Outside your bubble card: how widely it is covered and what pushed it down. */
 function bubbleNote(b: BubbleItem): string {
@@ -41,6 +49,8 @@ export default function FeedScreen() {
   const [cards, setCards] = useState<FeedCard[]>([]);
   const [digest, setDigest] = useState<DigestItem[]>([]);
   const [bubble, setBubble] = useState<BubbleItem[]>([]);
+  const [stories, setStories] = useState<StoryView[]>([]);
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [menuCard, setMenuCard] = useState<FeedCard | null>(null);
@@ -49,6 +59,9 @@ export default function FeedScreen() {
   const feedRef = useRef<FlatList<FeedCard>>(null);
   const digestRef = useRef<FlatList<DigestItem>>(null);
   const bubbleRef = useRef<FlatList<BubbleItem>>(null);
+  const storiesRef = useRef<FlatList<StoryView>>(null);
+  // The briefing sits above the first card; the seen-rule audit needs its height.
+  const headerH = useRef(0);
   const loadSeq = useRef(0);
 
   const reload = useCallback(async () => {
@@ -56,15 +69,19 @@ export default function FeedScreen() {
     const db = await getDb();
     const s = getState();
     const at = Date.now();
-    const [f, d, b] = await Promise.all([
+    const [f, d, b, st, br] = await Promise.all([
       loadFeed(db, s.settings, s.sessionId, at),
       loadDigest(db, s.settings, s.sessionId, at),
       loadBubble(db, s.settings, s.sessionId, at),
+      loadStories(db),
+      loadBriefing(db, at),
     ]);
     if (seq !== loadSeq.current) return; // a newer load is on its way
     setCards(f);
     setDigest(d);
     setBubble(b);
+    setStories(st);
+    setBriefing(br);
     setNow(at);
     setLoaded(true);
     // Only a launch that went straight to the feed is a fair measure (not one that began at setup).
@@ -80,6 +97,7 @@ export default function FeedScreen() {
     feedRef.current?.scrollToOffset({ offset: 0, animated: false });
     digestRef.current?.scrollToOffset({ offset: 0, animated: false });
     bubbleRef.current?.scrollToOffset({ offset: 0, animated: false });
+    storiesRef.current?.scrollToOffset({ offset: 0, animated: false });
     if (AUDIT) auditReset();
   }, [sessionVersion]);
 
@@ -211,7 +229,46 @@ export default function FeedScreen() {
       showSnack('You will see more like this');
     },
     onLess: less,
-  }), [less]);
+    onCoverage: (card: FeedCard) => {
+      router.push({ pathname: '/coverage/[id]', params: { id: String(card.article.id) } });
+    },
+    // Follow: what is already published is background; only what comes next counts as new.
+    onFollow: async (card: FeedCard) => {
+      const id = card.article.id;
+      const db = await getDb();
+      const view = (storyId: number) => router.push({ pathname: '/story/[id]', params: { id: String(storyId) } });
+      try {
+        const had = await storyOfArticle(db, id);
+        if (had != null) {
+          view(had);
+          return;
+        }
+        const storyId = await followStory(db, id, getState().settings.followThreshold, Date.now());
+        patchCard(id, { following: true });
+        setStories(await loadStories(db));
+        showSnack('Following this story', 'VIEW', () => view(storyId));
+      } catch (e) {
+        showSnack(errMsg(e));
+      }
+    },
+    onTopics: (card: FeedCard) => {
+      router.push({ pathname: '/settings/topics', params: { suggest: topicLabels(card).slice(0, 6).join('|') } });
+    },
+  }), [less, patchCard]);
+
+  const onOpenStory = useCallback((st: StoryView) => {
+    router.push({ pathname: '/story/[id]', params: { id: String(st.id) } });
+  }, []);
+  const onDigestCoverage = useCallback((d: DigestItem) => {
+    router.push({ pathname: '/coverage/[id]', params: { id: String(d.outlets[0].articleId) } });
+  }, []);
+  const onBriefingItem = useCallback((it: BriefingItem) => {
+    router.push({ pathname: '/coverage/[id]', params: { id: String(it.articleId) } });
+  }, []);
+  const onBriefingDismiss = useCallback(async (b: Briefing) => {
+    setBriefing(null);
+    await dismissBriefing(await getDb(), b.id, Date.now());
+  }, []);
 
   const onOpenOutlet = useCallback((o: DigestOutlet) => {
     openArticle(o.articleId, 'digest').catch(() => showSnack('Could not open the article'));
@@ -253,9 +310,13 @@ export default function FeedScreen() {
     ({ item }: { item: BubbleItem }) => <ArticleCard card={item.card} now={now} handlers={bubbleHandlers} note={bubbleNote(item)} />,
     [bubbleHandlers, now],
   );
+  const renderStory = useCallback(
+    ({ item }: { item: StoryView }) => <StoryCard story={item} now={now} onOpen={onOpenStory} />,
+    [now, onOpenStory],
+  );
   const renderDigest = useCallback(
-    ({ item }: { item: DigestItem }) => <DigestCard item={item} now={now} onOpenOutlet={onOpenOutlet} />,
-    [now, onOpenOutlet],
+    ({ item }: { item: DigestItem }) => <DigestCard item={item} now={now} onOpenOutlet={onOpenOutlet} onCoverage={onDigestCoverage} />,
+    [now, onOpenOutlet, onDigestCoverage],
   );
 
   const refreshControl = (
@@ -288,6 +349,7 @@ export default function FeedScreen() {
           {tabButton('foryou', 'For you', cards.length)}
           {tabButton('right', 'Right press', digest.filter((d) => d.seenAt == null).length)}
           {tabButton('bubble', 'Outside your bubble', bubble.filter((b) => b.card.seenAt == null).length)}
+          {tabButton('following', 'Following', stories.filter((st) => st.newCount > 0).length)}
         </ScrollView>
       </View>
       <BudgetBanner />
@@ -307,14 +369,21 @@ export default function FeedScreen() {
           onViewableItemsChanged={feedSeen.onViewableItemsChanged}
           onLayout={(e) => {
             viewportH.current = e.nativeEvent.layout.height;
-            if (AUDIT) auditScroll(0, viewportH.current, LIST_PADDING_TOP);
+            if (AUDIT) auditScroll(0, viewportH.current, LIST_PADDING_TOP + headerH.current);
           }}
-          onScroll={AUDIT ? (e) => auditScroll(e.nativeEvent.contentOffset.y, viewportH.current, LIST_PADDING_TOP) : undefined}
+          onScroll={AUDIT ? (e) => auditScroll(e.nativeEvent.contentOffset.y, viewportH.current, LIST_PADDING_TOP + headerH.current) : undefined}
           scrollEventThrottle={AUDIT ? 16 : undefined}
           initialNumToRender={5}
           maxToRenderPerBatch={6}
           windowSize={9}
           removeClippedSubviews
+          ListHeaderComponent={
+            briefing ? (
+              <View onLayout={(e) => { headerH.current = e.nativeEvent.layout.height; }}>
+                <BriefingCard briefing={briefing} onOpen={onBriefingItem} onDismiss={onBriefingDismiss} />
+              </View>
+            ) : undefined
+          }
           ListEmptyComponent={
             loaded ? (
               <Empty
@@ -381,6 +450,34 @@ export default function FeedScreen() {
               <Empty
                 title="Nothing outside your bubble right now"
                 body="This lists stories covered by three or more outlets that would be near the top on news value alone, but that your reading history has pushed well down. It fills as the app learns what you skip."
+              />
+            ) : undefined
+          }
+        />
+      </View>
+      <View style={{ flex: 1, display: tab === 'following' ? 'flex' : 'none' }}>
+        <FlatList
+          ref={storiesRef}
+          testID="stories-list"
+          data={stories}
+          keyExtractor={(st) => String(st.id)}
+          renderItem={renderStory}
+          contentContainerStyle={styles.listContent}
+          refreshControl={refreshControl}
+          initialNumToRender={6}
+          windowSize={7}
+          ListHeaderComponent={
+            stories.length ? (
+              <Text style={[styles.digestIntro, { color: t.muted }]}>
+                Stories you follow. New coverage from any source is gathered here, with a note on what has changed since you last looked.
+              </Text>
+            ) : undefined
+          }
+          ListEmptyComponent={
+            loaded ? (
+              <Empty
+                title="You are not following any stories"
+                body="Long-press a card and choose Follow this story. Whatever any outlet publishes on it next is gathered here, however many days it runs."
               />
             ) : undefined
           }

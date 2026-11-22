@@ -41,7 +41,7 @@ yarn-error.*
 /android
 
 # project
-coverage/
+/coverage/
 *.keystore
 .env
 *.apk

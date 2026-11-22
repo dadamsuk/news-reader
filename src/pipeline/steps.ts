@@ -631,8 +631,12 @@ export async function stepRetention(d: StepDeps, removeFiles?: (articleIds: numb
         DELETE FROM read_later WHERE article_id IN (${chunk});
         DELETE FROM second_source WHERE primary_article_id IN (${chunk}) OR other_article_id IN (${chunk});
         DELETE FROM match_pair WHERE primary_article_id IN (${chunk}) OR other_article_id IN (${chunk});
+        DELETE FROM story_article WHERE article_id IN (${chunk});
       `);
     }
+    await d.db.run('DELETE FROM briefing WHERE created_at < ?', [cutoff]);
+    await d.db.run('DELETE FROM coverage_note WHERE at < ?', [cutoff]);
+    await d.db.run('DELETE FROM topic_rule WHERE expires_at IS NOT NULL AND expires_at < ?', [cutoff]);
     await d.db.run('DELETE FROM cluster WHERE created_at < ? AND id NOT IN (SELECT cluster_id FROM article WHERE cluster_id IS NOT NULL)', [cutoff]);
     await d.db.run('DELETE FROM decision_log WHERE at < ?', [cutoff]);
     await d.db.run('DELETE FROM refresh_run WHERE id NOT IN (SELECT id FROM refresh_run ORDER BY id DESC LIMIT 60)');

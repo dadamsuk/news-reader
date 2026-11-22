@@ -19,6 +19,11 @@ export interface Settings {
   /** Between this and digestCoveredThreshold, Haiku decides whether the primary covered it. */
   digestGreyLow: number;
   capMatchThreshold: number;
+  /** An article this close to a followed story's starting point joins it (looser than "same event"). */
+  followThreshold: number;
+  /** Show a catch-up card after this many hours away. */
+  briefingEnabled: boolean;
+  briefingGapHours: number;
   weightA: number;
   weightS: number;
   weightF: number;
@@ -38,6 +43,10 @@ export interface Settings {
   lastBackgroundAt: number;
   lastRefreshAt: number;
   extractFailures: number;
+  /** When the app was last in use (set on going to the background and on each new session). */
+  lastActiveAt: number;
+  /** Non-zero: a catch-up briefing is due, covering the time since this moment. */
+  briefingSince: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +64,9 @@ export const DEFAULT_SETTINGS: Settings = {
   digestCoveredThreshold: 0.72,
   digestGreyLow: 0.55,
   capMatchThreshold: 0.8,
+  followThreshold: 0.62,
+  briefingEnabled: true,
+  briefingGapHours: 8,
   weightA: 1.0,
   weightS: 1.5,
   weightF: 1.0,
@@ -72,6 +84,8 @@ export const DEFAULT_SETTINGS: Settings = {
   lastBackgroundAt: 0,
   lastRefreshAt: 0,
   extractFailures: 0,
+  lastActiveAt: 0,
+  briefingSince: 0,
 };
 
 export async function loadSettings(db: Db): Promise<Settings> {

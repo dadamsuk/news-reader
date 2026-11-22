@@ -64,7 +64,7 @@ export function wordBand(wc: number | null): string | null {
   return 'long';
 }
 
-const BAND_LABEL: Record<string, string> = { short: 'Short reads', medium: 'Medium-length pieces', long: 'Long reads' };
+export const BAND_LABEL: Record<string, string> = { short: 'Short reads', medium: 'Medium-length pieces', long: 'Long reads' };
 
 /**
  * Feature values of an article, grouped by kind. Affinity averages the groups, and a group with

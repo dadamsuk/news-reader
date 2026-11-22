@@ -39,9 +39,15 @@ export function Snackbar({ bottomOffset = 0 }: { bottomOffset?: number }) {
 export interface MenuActions {
   onMore: (card: FeedCard) => void;
   onLess: (card: FeedCard) => void;
+  /** Every outlet's piece on this story, side by side. */
+  onCoverage: (card: FeedCard) => void;
+  /** Follow the story (or open it, when it is already followed). */
+  onFollow: (card: FeedCard) => void;
+  /** Mute or watch one of this article's topics. */
+  onTopics: (card: FeedCard) => void;
 }
 
-/** Long-press menu: More like this, Less like this, Why am I seeing this, Share link. */
+/** Long-press menu: coverage, follow, more or less like this, mute or watch, why, share. */
 export function CardMenu({ card, onClose, actions }: { card: FeedCard | null; onClose: () => void; actions: MenuActions }) {
   if (!card) return null;
   // Keyed by article, so "Why am I seeing this" starts closed for each card.
@@ -74,8 +80,21 @@ function CardMenuSheet({ card, onClose, actions }: { card: FeedCard; onClose: ()
       <Pressable testID="menu-backdrop" style={styles.backdrop} onPress={onClose} accessibilityLabel="Close menu" />
       <View testID="card-menu" style={[styles.sheet, { backgroundColor: t.card, paddingBottom: insets.bottom + 10 }]}>
         <Text style={[styles.sheetTitle, { color: t.muted }]} numberOfLines={2}>{card.article.title}</Text>
+        {item(
+          'albums-outline',
+          card.outletCount > 1 ? `Full coverage: ${card.outletCount} outlets` : 'Full coverage',
+          () => { actions.onCoverage(card); onClose(); },
+          'menu-coverage',
+        )}
+        {item(
+          card.following ? 'notifications' : 'notifications-outline',
+          card.following ? 'Following this story' : 'Follow this story',
+          () => { actions.onFollow(card); onClose(); },
+          'menu-follow',
+        )}
         {item('thumbs-up-outline', 'More like this', () => { actions.onMore(card); onClose(); }, 'menu-more')}
         {item('thumbs-down-outline', 'Less like this', () => { actions.onLess(card); onClose(); }, 'menu-less')}
+        {item('volume-mute-outline', 'Mute or watch a topic…', () => { actions.onTopics(card); onClose(); }, 'menu-topics')}
         {item('help-circle-outline', 'Why am I seeing this', showWhy, 'menu-why')}
         {loadingWhy ? <ActivityIndicator style={{ marginVertical: 8 }} color={t.muted} /> : null}
         {why ? (

@@ -176,6 +176,47 @@ export const MIGRATIONS: string[] = [
   DELETE FROM article WHERE id IN (SELECT id FROM drop_aus);
   DROP TABLE drop_aus;
   `,
+  // 3: followed stories, mute and watch lists, catch-up briefings, coverage comparisons.
+  `
+  CREATE TABLE story (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    centroid BLOB NOT NULL,
+    followed_at INTEGER NOT NULL,
+    last_checked_at INTEGER NOT NULL,
+    update_summary TEXT,
+    update_n INTEGER NOT NULL DEFAULT 0,
+    update_at INTEGER
+  );
+  CREATE TABLE story_article (
+    story_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (story_id, article_id)
+  );
+  CREATE INDEX story_article_article ON story_article(article_id);
+  CREATE TABLE topic_rule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    term TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER
+  );
+  CREATE TABLE briefing (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    since_at INTEGER NOT NULL,
+    items TEXT NOT NULL,
+    dismissed_at INTEGER
+  );
+  CREATE TABLE coverage_note (
+    key TEXT PRIMARY KEY,
+    agree TEXT NOT NULL,
+    differ TEXT NOT NULL,
+    outlets INTEGER NOT NULL,
+    at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

@@ -11,6 +11,8 @@ export const DIMS = 64;
 export const T0 = Date.UTC(2026, 10, 20, 12, 0, 0);
 export const HOUR = 3600_000;
 
+export type ChatPurpose = 'match' | 'digest' | 'story' | 'briefing' | 'compare';
+
 export interface Story {
   title: string;
   /** Stories on the same topic get near-identical embeddings. */
@@ -46,13 +48,19 @@ export class World {
   pages = new Map<string, string>();
   broken = new Set<string>();
   vectors = new Map<string, number[]>();
-  chatCalls: { purpose: 'match' | 'digest'; user: string }[] = [];
+  chatCalls: { purpose: ChatPurpose; user: string }[] = [];
   embedCalls = 0;
   /** Override to script the model. Return a string to send as the reply. */
-  onChat: (purpose: 'match' | 'digest', user: string) => string = (purpose) =>
-    purpose === 'match'
-      ? JSON.stringify({ match_id: 'c1', same_event: true, angle_note: 'Leads on the cost to taxpayers; quotes the opposition.' })
-      : JSON.stringify({ covered_by_primary: false, summary: 'Several outlets report a story the primary source has not run.' });
+  onChat: (purpose: ChatPurpose, user: string) => string = (purpose, user) => {
+    if (purpose === 'match') return JSON.stringify({ match_id: 'c1', same_event: true, angle_note: 'Leads on the cost to taxpayers; quotes the opposition.' });
+    if (purpose === 'story') return JSON.stringify({ summary: 'The new coverage reports a further development in the story.' });
+    if (purpose === 'compare') return JSON.stringify({ agree: 'All report the same announcement.', differ: 'One leads on cost; another on the reaction.' });
+    if (purpose === 'briefing') {
+      const ids = Array.from(user.matchAll(/^STORY (s\d+)$/gm)).map((m) => m[1]);
+      return JSON.stringify({ items: ids.map((id) => ({ id, sentence: `Outlets report story ${id}.` })) });
+    }
+    return JSON.stringify({ covered_by_primary: false, summary: 'Several outlets report a story the primary source has not run.' });
+  };
   chatCost = 0.002;
   private salt = 0;
 
@@ -131,7 +139,10 @@ export class World {
     if (url.includes('/chat/completions')) {
       const body = JSON.parse(init.body ?? '{}');
       const system: string = body.messages[0].content;
-      const purpose = system.includes('CANDIDATE') ? 'match' : 'digest';
+      const purpose: ChatPurpose = system.includes('CANDIDATE') ? 'match'
+        : system.includes('FOLLOWED STORY') ? 'story'
+          : system.includes('NEWS BRIEFING') ? 'briefing'
+            : system.includes('COMPARE COVERAGE') ? 'compare' : 'digest';
       const user: string = body.messages[1].content;
       this.chatCalls.push({ purpose, user });
       return reply(200, {

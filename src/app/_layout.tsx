@@ -68,6 +68,10 @@ export default function RootLayout() {
           <Stack.Screen name="setup" options={{ headerShown: false }} />
           <Stack.Screen name="e2e" options={{ headerShown: false }} />
           <Stack.Screen name="reader/[id]" options={{ title: '' }} />
+          <Stack.Screen name="coverage/[id]" options={{ title: 'Full coverage' }} />
+          <Stack.Screen name="story/[id]" options={{ title: 'Following' }} />
+          <Stack.Screen name="settings/topics" options={{ title: 'Muted and watched topics' }} />
+          <Stack.Screen name="settings/learned" options={{ title: 'What the app has learned' }} />
           <Stack.Screen name="settings/index" options={{ title: 'Settings' }} />
           <Stack.Screen name="settings/sources" options={{ title: 'Sources' }} />
           <Stack.Screen name="settings/source/[id]" options={{ title: 'Source' }} />

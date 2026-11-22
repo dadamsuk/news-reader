@@ -209,8 +209,29 @@ export default function SettingsScreen() {
           />
         </Group>
 
+        <Group style={{ marginTop: 14 }}>
+          <SwitchRow
+            testID="settings-briefing"
+            title="Catch-up briefing"
+            subtitle={`The biggest stories you missed, at the top of For you after ${s.briefingGapHours} hours away`}
+            value={s.briefingEnabled}
+            onChange={(v) => save({ briefingEnabled: v })}
+          />
+        </Group>
+        <SettingField
+          testID="settings-briefing-gap"
+          label="Briefing after this many hours away"
+          value={s.briefingGapHours}
+          numeric
+          min={1}
+          max={72}
+          onSave={(v) => save({ briefingGapHours: Number(v) })}
+        />
+
         <SectionTitle>Learning</SectionTitle>
         <Group>
+          <Row testID="settings-learned" title="What the app has learned" subtitle="Your likes and dislikes, one by one, and what you read" onPress={() => router.push('/settings/learned')} />
+          <Row testID="settings-topics" title="Muted and watched topics" subtitle="Hide a topic for a while, or never miss one" onPress={() => router.push('/settings/topics')} />
           <Row testID="settings-ranking" title="Ranking weights and thresholds" onPress={() => router.push('/settings/ranking')} />
           <Row testID="settings-reset-learning" title="Reset learning" danger onPress={confirmReset} />
         </Group>

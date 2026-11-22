@@ -3,7 +3,7 @@
 ## Unit and pipeline tests (Jest)
 
 ```
-npm test            # 78 tests, about 10 seconds
+npm test            # 112 tests, about 10 seconds
 npm run typecheck
 npm run lint
 ```
@@ -28,6 +28,10 @@ cover every acceptance item the spec marks "(test)":
 | 3 of every 20 feed slots are exploration | `ranking.test.ts` |
 | Budget cap stops model calls, feed still loads | `pipeline.test.ts` |
 | No API key in logs, exports or the database | `sources.test.ts` |
+
+The features added after the first build (follow a story, full coverage, catch-up briefing, mute
+and watch lists, what the app has learned) are covered by `features.test.ts`. They have no Maestro
+flow yet.
 
 ### Live checks (optional, cost a cent or two)
 

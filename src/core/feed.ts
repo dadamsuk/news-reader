@@ -1,8 +1,11 @@
 import type { Db } from '../db/db';
 import { placeholders } from '../db/db';
-import { HIDING_KINDS, applySignal, finalScore, goodFits, loadStats, lowerReasons, preferencePart } from './ranking';
+import {
+  BASELINE_RATIO, HIDING_KINDS, applySignal, finalScore, goodFits, importance, loadStats, lowerReasons, preferencePart,
+} from './ranking';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { isRightLeaning } from './sources';
+import { loadTopicFilter } from './topics';
 import {
   DAY, HOUR,
   type Article, type BubbleItem, type DigestItem, type FeedCard, type InteractionKind, type Lean, type LessReason, type Surface,
@@ -25,18 +28,25 @@ export const FEED_WINDOW_MS = 4 * DAY;
 export async function ensureSession(db: Db, now: number, forceNew = false): Promise<{ sessionId: string; isNew: boolean }> {
   const s = await loadSettings(db);
   const expired = s.lastBackgroundAt > 0 && now - s.lastBackgroundAt >= SESSION_GAP_MS;
+  // When the app was last in use: the moment it went to the background, or the last session start.
+  const awaySince = Math.max(s.lastBackgroundAt, s.lastActiveAt);
   if (s.sessionId && !forceNew && !expired) {
     if (s.lastBackgroundAt) await saveSettings(db, { lastBackgroundAt: 0 });
     return { sessionId: s.sessionId, isNew: false };
   }
   const sessionId = now.toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
-  await saveSettings(db, { sessionId, sessionStartedAt: now, lastBackgroundAt: 0 });
+  const patch: Partial<Settings> = { sessionId, sessionStartedAt: now, lastBackgroundAt: 0, lastActiveAt: now };
+  // Back after a long gap: the next refresh writes a catch-up briefing for the time away.
+  if (!forceNew && s.briefingEnabled && awaySince > 0 && now - awaySince >= s.briefingGapHours * HOUR) {
+    patch.briefingSince = awaySince;
+  }
+  await saveSettings(db, patch);
   await scoreIgnoredImpressions(db, sessionId, now);
   return { sessionId, isNew: true };
 }
 
 export async function noteBackground(db: Db, now: number): Promise<void> {
-  await saveSettings(db, { lastBackgroundAt: now });
+  await saveSettings(db, { lastBackgroundAt: now, lastActiveAt: now });
 }
 
 /** "Shown, not opened": cards from finished sessions that drew no reaction count as a weak negative. */
@@ -182,39 +192,100 @@ async function seenClusters(db: Db, sessionId: string, now: number): Promise<Set
   return new Set(rows.map((r) => r.cluster_id));
 }
 
+/** What a watched term adds to a card's score: enough to put it among the first cards. */
+export const WATCH_BOOST = 3;
+
+const FEED_SELECT = `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at seen_at,
+            COALESCE(c.outlet_count, 1) outlets,
+            (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
+            EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested,
+            EXISTS (SELECT 1 FROM story_article sa WHERE sa.article_id = a.id) following`;
+const NOT_HIDDEN = `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`;
+const likeTerm = (t: string) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
+const LIKE_ANY = "(a.title LIKE ? ESCAPE '\\' OR a.summary LIKE ? ESCAPE '\\' OR a.tags LIKE ? ESCAPE '\\' OR a.section LIKE ? ESCAPE '\\')";
+
 /**
  * The For you feed: processed articles from enabled primary sources that are unseen, or were first seen in
  * this session (so scrolling back up still works). Cards seen this session keep their place at
  * the top in the order they were seen; the rest are ranked, with exploration slots.
+ *
+ * Mute and watch lists apply here: an article matching a muted term is left out, and one matching
+ * a watched term is lifted to the top. A watched term also brings in perspective-source articles,
+ * one per story, when no primary source in the feed is carrying that story.
  */
 export async function loadFeed(db: Db, settings: Settings, sessionId: string, now: number): Promise<FeedCard[]> {
+  const topics = await loadTopicFilter(db, now);
   const rows = await db.all<any>(
-    `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at seen_at,
-            (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
-            EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested
+    `${FEED_SELECT}
      FROM article a
      JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
+     LEFT JOIN cluster c ON c.id = a.cluster_id
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN read_later rl ON rl.article_id = a.id
      WHERE a.ready_at IS NOT NULL
-       AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface != 'bubble'))
-       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`,
+       AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface NOT IN ('bubble', 'coverage')))
+       AND ${NOT_HIDDEN}`,
     [now - FEED_WINDOW_MS, sessionId],
   );
   const cards = new Map<number, FeedCard>();
-  for (const r of rows) {
-    const article = rowToArticle(r);
+  const addCard = (r: any, article: Article, watch: string | null) => {
     cards.set(article.id, {
       article,
       sourceName: r.source_name,
-      score: finalScore({ a: article.scoreA, s: article.scoreS, i: article.scoreI, publishedAt: article.publishedAt }, settings, now),
+      score: finalScore({ a: article.scoreA, s: article.scoreS, i: article.scoreI, publishedAt: article.publishedAt }, settings, now)
+        + (watch ? WATCH_BOOST : 0),
       explore: false,
       seenAt: r.seen_at ?? null,
       saved: !!r.saved,
       interested: !!r.interested,
       goodFit: false,
       second: null,
+      outletCount: r.outlets ?? 1,
+      watch,
+      following: !!r.following,
     });
+  };
+  const primaryClusters = new Set<number>();
+  for (const r of rows) {
+    const article = rowToArticle(r);
+    if (topics.muted(article)) continue;
+    addCard(r, article, topics.watched(article));
+    if (article.clusterId != null) primaryClusters.add(article.clusterId);
+  }
+  if (topics.watchTerms.length) {
+    // Watched terms reach into the perspective sources too. SQL narrows by substring; the whole-word
+    // test decides. A story a primary card already carries, or one seen in an earlier session, is skipped.
+    const params = topics.watchTerms.flatMap((t) => [likeTerm(t), likeTerm(t), likeTerm(t), likeTerm(t)]);
+    const extra = await db.all<any>(
+      `${FEED_SELECT}
+       FROM article a
+       JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1
+       LEFT JOIN cluster c ON c.id = a.cluster_id
+       LEFT JOIN impression i ON i.article_id = a.id
+       LEFT JOIN read_later rl ON rl.article_id = a.id
+       WHERE a.ready_at IS NOT NULL
+         AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface = 'feed'))
+         AND ${NOT_HIDDEN} AND (${topics.watchTerms.map(() => LIKE_ANY).join(' OR ')})
+       ORDER BY (i.article_id IS NULL), a.published_at DESC`,
+      [now - FEED_WINDOW_MS, sessionId, ...params],
+    );
+    const suppressed = extra.length ? await seenClusters(db, sessionId, now) : new Set<number>();
+    const taken = new Set<number>();
+    for (const r of extra) {
+      const article = rowToArticle(r);
+      const watch = topics.watched(article);
+      if (!watch || topics.muted(article)) continue;
+      const cid = article.clusterId;
+      if (r.seen_at == null && cid != null && (primaryClusters.has(cid) || suppressed.has(cid) || taken.has(cid))) continue;
+      if (cid != null) taken.add(cid);
+      // Scoring covers primary and Right press articles only; one it has not reached counts as an
+      // article with no history, not (score 0) as one strongly liked.
+      if (article.scoreI === 0) {
+        article.scoreA = BASELINE_RATIO;
+        article.scoreI = importance(r.outlets ?? 1);
+      }
+      addCard(r, article, watch);
+    }
   }
   const all = Array.from(cards.values());
   const fits = goodFits(all.map((c) => preferencePart({ a: c.article.scoreA, s: c.article.scoreS }, settings, now)));
@@ -272,7 +343,7 @@ async function attachSecondSources(db: Db, cards: FeedCard[], sessionId: string,
 
 export async function loadDigest(db: Db, settings: Settings, sessionId: string, now: number): Promise<DigestItem[]> {
   const rows = await db.all<any>(
-    `SELECT a.id, a.cluster_id, a.source_id, a.title, a.image_url, a.published_at, a.score_a, a.score_s,
+    `SELECT a.id, a.cluster_id, a.source_id, a.title, a.summary, a.section, a.tags, a.image_url, a.published_at, a.score_a, a.score_s,
             s.name source_name, s.lean, s.paywalled, c.digest_summary, c.digest_at,
             i.first_seen_at seen_at, i.session_id seen_session
      FROM cluster c
@@ -291,10 +362,14 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
     list.push(r);
     byCluster.set(r.cluster_id, list);
   }
+  const topics = await loadTopicFilter(db, now);
+  const mutedPiece = (m: any) => topics.muted({ title: m.title, summary: m.summary, section: m.section, tags: safeJson<string[]>(m.tags, []) });
   const items: DigestItem[] = [];
   for (const [clusterId, members] of byCluster) {
     // Once any article of the story was seen in an earlier session, the story is done.
     if (members.some((m) => m.seen_session && m.seen_session !== sessionId)) continue;
+    // A muted term in any outlet's piece mutes the story.
+    if (topics.rules.length && members.some(mutedPiece)) continue;
     const seenTimes = members.filter((m) => m.seen_at != null).map((m) => m.seen_at as number);
     const perSource = new Map<number, any>();
     for (const m of members) if (!perSource.has(m.source_id)) perSource.set(m.source_id, m);
@@ -366,8 +441,9 @@ export async function loadBubble(db: Db, settings: Settings, sessionId: string, 
     [now - FEED_WINDOW_MS, sessionId],
   );
   const neutralSettings = { ...settings, weightA: 0, weightS: 0 };
-  const all = rows.map((r) => {
-    const article = rowToArticle(r);
+  const topics = await loadTopicFilter(db, now);
+  const kept = rows.map((r) => ({ r, article: rowToArticle(r) })).filter((x) => !topics.muted(x.article));
+  const all = kept.map(({ r, article }) => {
     const parts = { a: article.scoreA, s: article.scoreS, i: article.scoreI, publishedAt: article.publishedAt };
     return {
       r,
@@ -398,6 +474,9 @@ export async function loadBubble(db: Db, settings: Settings, sessionId: string, 
       interested: !!x.r.interested,
       goodFit: !!x.goodFit,
       second: null,
+      outletCount: x.r.outlets,
+      watch: null,
+      following: false,
     },
     outletCount: x.r.outlets,
     personalRank: pr,

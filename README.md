@@ -7,6 +7,11 @@ A personal news reader for Android and iOS, built with React Native and Expo (SD
 - Learns what gets read and ranks the feed accordingly.
 - Pairs primary stories with a second source from a different perspective, with a one-line note on how its angle differs.
 - A Right press tab lists stories the right-leaning press is running that the primary sources have not covered.
+- Follow a story: new coverage from any source is gathered under it, with a note on what changed.
+- Full coverage: every outlet's piece on a story side by side, and on request where they agree and differ.
+- A catch-up briefing of the biggest stories after a long time away.
+- Mute a topic for a while, or watch one so it always surfaces.
+- Shows what it has learned, preference by preference, and lets you correct it.
 - Every source, the Guardian included, is configurable data, not code.
 
 Runs entirely on the phone. The only network calls are to the news sources and to OpenRouter.
@@ -36,10 +41,10 @@ and then fills the feed.
 ## Layout
 
 ```
-src/app/         screens (Expo Router): feed, reader, read later, history, setup, settings, debug
-src/core/        feed and seen rule, ranking and learning, sources, settings (no React, no Expo)
+src/app/         screens (Expo Router): feed, reader, full coverage, followed story, read later, history, setup, settings, debug
+src/core/        feed and seen rule, ranking and learning, stories, coverage, topics, briefing, sources, settings (no React, no Expo)
 src/adapters/    guardian_content_api, rss, google_news_search
-src/pipeline/    the refresh pipeline: fetch, embed, cluster, second sources, digest, score, prefetch
+src/pipeline/    the refresh pipeline: fetch, embed, cluster, second sources, score, digest, followed stories, briefing, prefetch
 src/reader/      article extraction (Readability + linkedom), sanitiser, reader page
 src/llm/         OpenRouter client: embeddings, JSON chat, cost recording, budget cap
 src/db/          SQLite schema and migrations behind a small interface

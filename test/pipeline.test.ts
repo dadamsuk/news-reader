@@ -28,7 +28,7 @@ describe('refresh pipeline', () => {
     await updateSource(s.db, bbc.id, { ...bbc, endpoint: `${feedUrl('BBC News')}\nhttps://bbc-news.test/politics.xml` });
     s.world.feeds.set('https://bbc-news.test/politics.xml', s.world.feeds.get(feedUrl('BBC News'))!);
     const res = await s.run();
-    expect(res.steps.map((x) => x.name[0])).toEqual(['1', '3', '4', '5', '6', '7', '8', '9']);
+    expect(res.steps.map((x) => x.name[0])).toEqual(['1', '3', '4', '5', '6', '7', '7', '7', '8', '9']);
     expect(res.steps.every((x) => x.ok)).toBe(true);
     expect(res.newArticles).toBe(2);
     expect((await s.db.get<{ n: number }>('SELECT COUNT(*) n FROM article'))!.n).toBe(2);

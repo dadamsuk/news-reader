@@ -3,7 +3,8 @@ export type Role = 'primary' | 'perspective';
 export type Lean = 'left' | 'centre-left' | 'centre' | 'centre-right' | 'right';
 export type ReaderMode = 'extract' | 'api_body' | 'browser';
 export type Tone = 'news' | 'comment' | 'analysis' | 'live';
-export type Surface = 'feed' | 'second_source' | 'digest' | 'bubble';
+/** Where an article was first on screen. 'coverage' is the Full coverage and followed-story lists (opened from there, not shown as a card). */
+export type Surface = 'feed' | 'second_source' | 'digest' | 'bubble' | 'coverage';
 export type InteractionKind =
   | 'open' | 'read' | 'save' | 'unsave' | 'dismiss' | 'more' | 'less' | 'bounce' | 'ignored'
   | 'interested' | 'less_source' | 'less_section' | 'less_topic';
@@ -96,6 +97,57 @@ export interface FeedCard {
   /** Preferences lifted it above the typical story on offer (false: it is here for being recent). */
   goodFit: boolean;
   second: SecondSourceView | null;
+  /** Distinct outlets covering this story (1 when it stands alone). */
+  outletCount: number;
+  /** The watch-list term that put or kept it here, if any. */
+  watch: string | null;
+  /** Part of a story being followed. */
+  following: boolean;
+}
+
+export type TopicRuleKind = 'mute' | 'watch';
+
+/** A muted or watched term. Expired rules stop applying by themselves. */
+export interface TopicRule {
+  id: number;
+  kind: TopicRuleKind;
+  term: string;
+  createdAt: number;
+  expiresAt: number | null;
+}
+
+/** A followed story as listed in the Following tab. */
+export interface StoryView {
+  id: number;
+  title: string;
+  followedAt: number;
+  articleCount: number;
+  /** Articles that joined since it was last opened. */
+  newCount: number;
+  newOutlets: number;
+  latestAt: number | null;
+  /** What changed, written by the model; null until written (or at the budget cap). */
+  updateSummary: string | null;
+  /** Newest new headline, shown when there is no summary. */
+  latestTitle: string | null;
+  imageUrl: string | null;
+}
+
+export interface BriefingItem {
+  clusterId: number;
+  /** The article to open: a primary one when there is one. */
+  articleId: number;
+  headline: string;
+  /** One neutral sentence from the model; null shows the headline. */
+  sentence: string | null;
+  outletCount: number;
+}
+
+export interface Briefing {
+  id: number;
+  createdAt: number;
+  sinceAt: number;
+  items: BriefingItem[];
 }
 
 /** A widely covered primary story that the learned ranking pushed far down the For you feed. */

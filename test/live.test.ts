@@ -51,7 +51,7 @@ const live = process.env.LIVE === '1' && envKey();
   console.log(`DIGEST ${digest.length}\n` + digest.slice(0, 15).map((d) => `[${d.outletCount}] ${d.summary}\n      ${d.outlets.map((o) => `${o.sourceName}: ${o.title}`).join('\n      ')}`).join('\n'));
   console.log('sources', (await listSources(db)).map((s) => `${s.name}: ${s.lastError ?? 'ok'}`).join(' | '));
   console.log('spend $', (await monthSpend(db, Date.now())).toFixed(4), 'with second', feed.filter((c) => c.second).length);
-  expect(res.steps.length).toBe(8);
+  expect(res.steps.length).toBe(10);
   expect(feed.length).toBeGreaterThan(10);
   db.close();
 }, 300000);

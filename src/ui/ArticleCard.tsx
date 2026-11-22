@@ -82,6 +82,16 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
                 </View>
               ) : null}
               <Text style={[styles.age, { color: t.faint }]}>{ageLabel(a.publishedAt, now)}</Text>
+              {card.following ? (
+                <Ionicons
+                  testID={`following-${a.id}`}
+                  name="notifications"
+                  size={13}
+                  color={t.accent}
+                  style={{ marginLeft: 8 }}
+                  accessibilityLabel="Part of a story you follow"
+                />
+              ) : null}
               <View style={{ flex: 1 }} />
               <Pressable
                 testID={`interested-${a.id}`}
@@ -145,6 +155,15 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
                 {card.second.angleNote ? `  ${card.second.angleNote}` : '  Also covering this story'}
               </Text>
             </Pressable>
+          ) : null}
+          {card.watch ? (
+            <View testID={`watch-${a.id}`} style={[styles.strip, { backgroundColor: t.strip, borderTopColor: t.border }]}>
+              <Ionicons name="eye-outline" size={15} color={t.muted} style={{ marginTop: 2 }} />
+              <Text style={[styles.stripText, { color: t.muted }]} numberOfLines={1}>
+                Watching <Text style={[styles.stripSource, { color: t.text }]}>{card.watch}</Text>
+                {`  ·  ${card.sourceName}`}
+              </Text>
+            </View>
           ) : null}
           {note ? (
             <View testID={`note-${a.id}`} style={[styles.strip, { backgroundColor: t.strip, borderTopColor: t.border }]}>

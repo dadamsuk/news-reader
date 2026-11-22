@@ -250,3 +250,97 @@ emulator; "Jest" and "Maestro" name the automated check.
 | Reset learning returns to cold start | Pass (Jest). The Settings button was not tapped on the emulator |
 | Spend shown from `llm_usage`; $0.01 budget stops calls, shows the banner, feed still loads | Pass (Maestro `05-budget-health`, Jest) |
 | No API key in logs, bundle, sources export or database export | Pass: APK and device log searched for the real key; Jest covers the export and the database |
+
+## 14. Five features added after the first build (22 November 2026)
+
+Follow a story, Full coverage, the catch-up briefing, mute and watch lists, and "What the app has
+learned". None is in [spec.md](spec.md). Each decision below is a choice I made; change any of them.
+
+### What was verified
+
+112 Jest tests pass (23 of them new, in `test/features.test.ts`), typecheck and lint are clean, and
+Metro bundles the app. **None of the new screens has been run on a phone or emulator**, and there
+is no Maestro flow for them. Migration 3 adds the tables; it only creates, so existing data is untouched.
+
+### Follow a story
+
+- **Follow from a card's long-press menu, from Full coverage, or from a Right press card.** A
+  Following tab sits beside Outside your bubble, with a count of stories that have something new.
+- **A story is the article's cluster at the moment you follow it.** Its centre never moves
+  afterwards, so a story cannot drift into its whole topic. A later article joins when it is within
+  the follow threshold of that centre (0.62, in Settings, Ranking) or when it shares a cluster with
+  an article already in the story. 0.62 is looser than "same story" (0.75) on purpose: a running
+  story moves on. It is a guess from the similarity bands in section 1 and has not been tuned on
+  real data.
+- **What is already published when you follow is background.** Only what arrives afterwards counts
+  as new. Opening the story marks everything as looked at.
+- **One model call per story per refresh, and only when the new coverage has grown.** It writes what
+  changed in 45 words or fewer. At the budget cap the story shows its newest headline instead.
+- **Articles are matched while they are under 84 hours old** (the embedding window), from every
+  enabled source, whether or not you have seen them.
+- **Followed stories do not bypass the seen rule or retention.** A story's list is like History:
+  listing an article there does not mark it seen, opening it does. Articles still go after 14 days;
+  the story stays until you stop following.
+
+### Full coverage
+
+- **The list is the article's cluster plus any article the model confirmed as the same event**
+  (a second source can sit just outside the cluster).
+- **Ordered along the leans set in Settings, but the leans are not shown or sent to the model**,
+  in keeping with "the app never shows them as a rating of the outlet". The comparison prompt asks
+  the model not to describe any outlet's politics; a test checks no lean reaches the prompt.
+- **The comparison is made on request**, one call, from headlines and summaries only, and stored
+  per story. If more outlets cover the story later, the button offers to compare again.
+- **Opening an article from Full coverage or a followed story** records it as seen with its own
+  surface (`coverage`), so it does not then appear among this session's feed cards.
+
+### Catch-up briefing
+
+- **Due after 8 hours away** (Settings; can be switched off). "Away" is measured from when the app
+  last went to the background. A pull-to-refresh never triggers one.
+- **Up to five stories that two or more outlets ran while you were away**, most outlets first, one
+  model call for all the sentences. It looks back three days at most. Muted topics are left out.
+- **It is a card above the first For you card** until dismissed, replaced, or a day old. Tapping a
+  line opens Full coverage for that story. Briefing lines do not count as seeing the articles.
+- **Not read aloud.** I mentioned text-to-speech when proposing this; it needs a new native module
+  (`expo-speech`) and so a new build, and I left it out rather than add an untested native dependency.
+- If the app was refreshed in the background within the last two minutes, opening it writes the
+  briefing without fetching again.
+
+### Mute and watch lists
+
+- **Whole words and phrases, ignoring case, in the headline, standfirst, section and topic tags**;
+  a plural "s" also matches. Settings, Learning, Muted and watched topics; or long-press a card and
+  choose "Mute or watch a topic", which offers that card's topics.
+- **Mute applies when the lists are drawn**, so it takes effect at once and ends by itself: For you,
+  Right press (one outlet's wording is enough to mute the story), Outside your bubble and the
+  briefing. Muted stories send no "shown, not opened" signal. Followed stories are not filtered.
+- **Watch adds 3 to the card's score**, which puts it among the first cards, and marks it
+  "Watching". It also brings in articles from perspective sources, one per story (the newest), when
+  no primary card in the feed carries that story. This is the one way a non-primary article becomes
+  a For you card, which departs from the spec's "the default feed is the primary sources only".
+- **A term has one rule at a time.** Adding it again replaces the earlier rule on either list.
+
+### What the app has learned
+
+- **Lists every learned preference worth showing** (sections, topics, writers, sources, types,
+  length), likes then dislikes, strongest first, with More, Less and Forget on each. More and Less
+  weigh the same as "More like this" and "Less like this" on a card (3). Each change re-scores the
+  waiting feed.
+- **Preferences smaller than one clear signal are hidden** (a card merely scrolled past moves each
+  of its features by about 0.04; the floor is 0.08).
+- **The similarity part of the ranking (what your reading is "like") cannot be listed** and is not
+  editable here; the screen says so and points to Reset learning.
+- **Reading diet:** articles read (not merely opened) in the last seven days and the seven before,
+  by section, by source and by the lean you gave each source. It is a count of your own settings,
+  not a rating of any outlet.
+
+### Other changes
+
+- **Pipeline steps are now** fetch, embed, cluster, second sources, score, Right press, followed
+  stories (`7b`), briefing (`7c`), prefetch, retention. Retention also clears old briefings and
+  comparisons, expired topic rules, and story links to deleted articles.
+- **`.gitignore`: `coverage/` became `/coverage/`.** The unanchored rule (for Jest's coverage
+  folder) was silently ignoring the new `src/app/coverage/` screen.
+- **Extra LLM cost** is one call per followed story with new coverage per refresh, one per briefing,
+  and one per comparison you ask for, each about the size of a second-source check ($0.002).

@@ -4,7 +4,9 @@ import { ensureSession, noteBackground } from '../core/feed';
 import { loadSettings, saveSettings, type Settings } from '../core/settings';
 import { errMsg } from '../core/util';
 import { monthSpend } from '../llm/openrouter';
-import { SCORE_STEP, refresh, type RefreshDeps, type RefreshResult, type Trigger } from '../pipeline/refresh';
+import type { LlmDeps } from '../llm/openrouter';
+import { stepBriefing } from '../pipeline/extras';
+import { OPENROUTER_KEY_REF, SCORE_STEP, refresh, type RefreshDeps, type RefreshResult, type Trigger } from '../pipeline/refresh';
 import type { BodyDeps } from '../reader/body';
 import { bumpData, getState, setState } from '../state/store';
 import { getDb } from './db';
@@ -84,8 +86,15 @@ export async function appWentBackground(): Promise<void> {
 // What runs next, shown after each step finishes.
 const STEP_LABELS = [
   'Reading headlines', 'Grouping stories', 'Finding second sources', 'Ranking', 'Building Right press',
-  'Saving articles for offline', 'Tidying up', 'Done',
+  'Updating followed stories', 'Writing your briefing', 'Saving articles for offline', 'Tidying up', 'Done',
 ];
+
+/** For model calls made from a screen (comparing coverage), outside a refresh. */
+export async function llmDeps(): Promise<LlmDeps> {
+  const db = await getDb();
+  const apiKey = await secrets.get(OPENROUTER_KEY_REF).catch(() => null);
+  return { db, fetch: appFetch, settings: getState().settings, apiKey, now: () => Date.now() };
+}
 
 let bumpTimer: ReturnType<typeof setTimeout> | null = null;
 function throttledBump(): void {
@@ -145,6 +154,23 @@ export async function runRefresh(
 export function refreshOnOpen(): void {
   const { settings, refreshing } = getState();
   if (refreshing || !settings.setupDone) return;
-  if (Date.now() - settings.lastRefreshAt < 2 * 60_000) return;
+  if (Date.now() - settings.lastRefreshAt < 2 * 60_000) {
+    // Just refreshed (in the background, say): no need to fetch again, but a catch-up briefing
+    // may still be due for this return to the app.
+    briefingOnly().catch(() => {});
+    return;
+  }
   runRefresh('open').catch(() => {});
+}
+
+async function briefingOnly(): Promise<void> {
+  const db = await getDb();
+  const settings = await loadSettings(db);
+  if (!settings.briefingSince) return;
+  const llm = { ...(await llmDeps()), settings };
+  const info = await stepBriefing({ db, fetch: appFetch, secrets, settings, now: () => Date.now(), llm });
+  if (info !== 'not due') {
+    await syncBudget(settings);
+    bumpData();
+  }
 }
