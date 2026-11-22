@@ -1,0 +1,96 @@
+# A card at least half on screen is seen; one that only peeks is not. Seen cards stay for the
+# session and never return after pull-to-refresh or 10 minutes in the background.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+
+# Scroll about, slowly and with flings, then check the record against card geometry.
+- swipe:
+    start: 50%, 70%
+    end: 50%, 45%
+    duration: 900
+- swipe:
+    start: 50%, 75%
+    end: 50%, 30%
+    duration: 250
+- swipe:
+    start: 50%, 40%
+    end: 50%, 62%
+    duration: 700
+- swipe:
+    start: 50%, 70%
+    end: 50%, 52%
+    duration: 1200
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-debug"
+    direction: DOWN
+- tapOn:
+    id: "settings-debug"
+- assertVisible: "Seen rule audit: OK.*"
+- back
+- back
+
+# Within the session, scrolling back up still shows the cards already seen.
+- scrollUntilVisible:
+    element: "Chancellor raises income tax threshold in autumn budget"
+    direction: UP
+- assertVisible: "Rail strike to halt most trains across northern England next week"
+
+# History lists what was seen, and its search finds a headline.
+- tapOn:
+    id: "tab-history"
+- assertNotVisible: "Night trains from London to the Alps to return next winter"
+# Newest first, so the first story seen is at the bottom.
+- scrollUntilVisible:
+    element: "Chancellor raises income tax threshold in autumn budget"
+    direction: DOWN
+- assertNotVisible: "Night trains from London to the Alps to return next winter"
+- tapOn:
+    id: "history-search"
+- inputText: "rail strike"
+- hideKeyboard
+- assertVisible: "Rail strike to halt most trains across northern England next week"
+- assertNotVisible: "Chancellor raises income tax threshold in autumn budget"
+- tapOn:
+    id: "history-clear"
+- tapOn:
+    id: "tab-feed"
+
+# Ten minutes in the background ends the session: seen cards are gone from the feed.
+- openLink: "newsreader://e2e?action=background&minutes=11"
+- extendedWaitUntil:
+    visible:
+      id: "feed-list"
+    timeout: 20000
+- extendedWaitUntil:
+    notVisible: "Chancellor raises income tax threshold in autumn budget"
+    timeout: 15000
+- assertNotVisible: "Rail strike to halt most trains across northern England next week"
+# The unseen ones are still there, down to the last.
+- scrollUntilVisible:
+    element: "Night trains from London to the Alps to return next winter"
+    direction: DOWN
+
+# Pull-to-refresh ends the session too. Every story has now been on screen, so nothing is left.
+- swipe:
+    start: 50%, 35%
+    end: 50%, 85%
+    duration: 300
+- swipe:
+    start: 50%, 35%
+    end: 50%, 85%
+    duration: 300
+- swipe:
+    start: 50%, 35%
+    end: 50%, 85%
+    duration: 500
+- extendedWaitUntil:
+    visible: "You are all caught up"
+    timeout: 90000
+- assertNotVisible: "Night trains from London to the Alps to return next winter"
+- tapOn:
+    id: "tab-history"
+- assertVisible: "Night trains from London to the Alps to return next winter"

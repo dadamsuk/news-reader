@@ -1,0 +1,62 @@
+# Not part of the suite: sets the app up against the REAL feeds and the REAL OpenRouter API, for a
+# manual look at live data. With no Guardian API key to hand, it reads the Guardian through its
+# public RSS feeds (E2E builds only). Costs a cent or two per run.
+#
+#   maestro test .maestro/live/live-setup.yaml -e OPENROUTER_KEY=sk-or-...
+appId: net.dsc.newsreader
+---
+- clearState
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "setup-screen"
+    timeout: 60000
+- tapOn:
+    id: "setup-openrouter"
+- inputText: ${OPENROUTER_KEY}
+- hideKeyboard
+- tapOn:
+    id: "setup-check"
+# The OpenRouter key passes its test call; the Guardian key is missing.
+- extendedWaitUntil:
+    visible: "Enter the key for Guardian."
+    timeout: 30000
+- assertVisible: "This key works."
+- tapOn:
+    id: "setup-skip"
+- extendedWaitUntil:
+    visible:
+      id: "settings-button"
+    timeout: 30000
+- openLink: "newsreader://e2e?action=guardianrss"
+- extendedWaitUntil:
+    visible:
+      id: "settings-button"
+    timeout: 30000
+
+# Let the refresh that setup started finish (the Guardian has no key yet, so it fetched the rest).
+- extendedWaitUntil:
+    visible: "Updated.*"
+    timeout: 180000
+
+# Then a refresh with the Guardian included, from the Debug screen so its timings can be read there.
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-debug"
+    direction: DOWN
+- tapOn:
+    id: "settings-debug"
+- tapOn:
+    id: "debug-refresh"
+- extendedWaitUntil:
+    visible:
+      id: "debug-run-manual"
+    timeout: 20000
+- back
+- back
+- extendedWaitUntil:
+    visible:
+      id: "card-.*"
+    timeout: 180000

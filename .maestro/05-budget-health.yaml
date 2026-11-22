@@ -1,0 +1,74 @@
+# The budget cap stops model calls and shows the banner while the feed still loads; a broken feed
+# shows red with its error, the Test button reports it, and the other sources still refresh.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-budget"
+    direction: DOWN
+- assertVisible: "Spent this month.*"
+- tapOn:
+    id: "settings-budget"
+- eraseText: 10
+- inputText: "0.01"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Budget reached.*"
+    timeout: 10000
+- back
+- assertVisible:
+    id: "budget-banner"
+
+# New stories arrive and one feed breaks. The refresh still completes and the feed still loads.
+- runScript: scripts/batch2.js
+- runScript: scripts/break-mail.js
+- swipe:
+    start: 50%, 40%
+    end: 50%, 85%
+    duration: 500
+- extendedWaitUntil:
+    visible: "Prime minister announces surprise cabinet reshuffle"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Updated.*"
+    timeout: 90000
+- assertVisible:
+    id: "budget-banner"
+
+# The broken source is red, with its error; the others are fine.
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-sources"
+    direction: DOWN
+- tapOn:
+    id: "settings-sources"
+- assertVisible: ".*Failed: .*503.*"
+- tapOn:
+    id: "source-daily-mail"
+- assertVisible: "Last fetch failed.*"
+- scrollUntilVisible:
+    element:
+      id: "source-test"
+    direction: DOWN
+- tapOn:
+    id: "source-test"
+- scrollUntilVisible:
+    element: "Error: .*503.*"
+    direction: DOWN
+- back
+- tapOn:
+    id: "source-bbc-news"
+- scrollUntilVisible:
+    element:
+      id: "source-test"
+    direction: DOWN
+- tapOn:
+    id: "source-test"
+- scrollUntilVisible:
+    element: 'Working: [0-9]+ items. First five:'
+    direction: DOWN

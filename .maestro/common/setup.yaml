@@ -1,0 +1,31 @@
+# Fresh install, pointed at the mock server, through the real setup screen.
+appId: net.dsc.newsreader
+---
+- runScript: ../scripts/reset-mock.js
+- clearState
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "setup-screen"
+    timeout: 60000
+- openLink: "newsreader://e2e?action=mock&host=10.0.2.2:8787"
+- extendedWaitUntil:
+    visible:
+      id: "setup-source-guardian"
+    timeout: 30000
+- tapOn:
+    id: "setup-openrouter"
+- inputText: "sk-or-e2e"
+- tapOn:
+    id: "setup-source-guardian"
+- inputText: "e2e-guardian"
+- hideKeyboard
+- tapOn:
+    id: "setup-check"
+- extendedWaitUntil:
+    visible: "Chancellor raises income tax threshold in autumn budget"
+    timeout: 60000
+# Wait for the whole refresh (matching, digest, prefetch) to finish.
+- extendedWaitUntil:
+    visible: "Updated.*"
+    timeout: 90000

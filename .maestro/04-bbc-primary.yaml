@@ -1,0 +1,65 @@
+# Making BBC News primary and disabling the Guardian gives a For you feed of BBC articles only,
+# with second sources and Right press still working.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-sources"
+    direction: DOWN
+- tapOn:
+    id: "settings-sources"
+- tapOn:
+    id: "source-bbc-news"
+- tapOn:
+    id: "source-role-primary"
+- scrollUntilVisible:
+    element:
+      id: "source-save"
+    direction: DOWN
+- tapOn:
+    id: "source-save"
+- assertVisible: "Primary: the For you feed"
+- tapOn:
+    id: "source-guardian"
+- scrollUntilVisible:
+    element:
+      id: "source-enabled"
+    direction: DOWN
+- tapOn:
+    id: "source-enabled"
+- scrollUntilVisible:
+    element:
+      id: "source-save"
+    direction: DOWN
+- tapOn:
+    id: "source-save"
+- assertVisible: "Primary: the For you feed"
+- back
+- back
+
+# The feed is now BBC only. (BBC articles already shown as second-source strips do not come back as cards.)
+- assertNotVisible: "Chancellor raises income tax threshold in autumn budget"
+- assertNotVisible: "Ceasefire talks resume in Cairo as mediators press for a deal"
+- assertVisible: "Storm warning issued for western Scotland"
+
+# New stories are published everywhere, the Guardian included. After the next refresh the feed
+# carries the BBC one, paired with a right-leaning outlet, and nothing from the Guardian.
+- runScript: scripts/batch2.js
+- swipe:
+    start: 50%, 35%
+    end: 50%, 85%
+    duration: 500
+- extendedWaitUntil:
+    visible: "Three ministers leave cabinet in reshuffle"
+    timeout: 90000
+- assertVisible: ".*Daily Mail.*Calls it chaos.*"
+- assertNotVisible: "Prime minister announces surprise cabinet reshuffle"
+- assertNotVisible: "Chancellor raises income tax threshold in autumn budget"
+# Right press still works.
+- tapOn:
+    id: "feedtab-right"
+- assertVisible: "3 OUTLETS"
+- assertVisible: "Protesters are reported to have gathered.*"

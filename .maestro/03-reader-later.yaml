@@ -1,0 +1,113 @@
+# Reader with text and pictures, Read later with undo, done at 70% scroll, fallback to the API body.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+
+# Tap: read now, in the reader.
+- tapOn: "Chancellor raises income tax threshold in autumn budget"
+- extendedWaitUntil:
+    visible:
+      id: "reader-webview"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "reader-body-extract"
+    timeout: 30000
+- extendedWaitUntil:
+    visible: "Paragraph 1 of the article.*"
+    timeout: 20000
+- assertVisible: ".*Mock Reporter.*"
+- assertVisible:
+    id: "reader-second"
+- tapOn:
+    id: "reader-save"
+- assertVisible: "Saved to Read later"
+- back
+
+# Swipe right saves, with undo.
+- swipe:
+    from:
+      text: "Rail strike to halt most trains across northern England next week"
+    direction: RIGHT
+- assertVisible: "Saved to Read later"
+- tapOn:
+    id: "snackbar-action"
+- tapOn:
+    id: "tab-later"
+- assertVisible: "Chancellor raises income tax threshold in autumn budget"
+- assertNotVisible: "Rail strike to halt most trains across northern England next week"
+
+# Reading a saved article to the end marks it done and moves it to History.
+- tapOn: "Chancellor raises income tax threshold in autumn budget"
+- extendedWaitUntil:
+    visible:
+      id: "reader-webview"
+    timeout: 30000
+# (Android does not always expose a WebView's text on a second visit, so scroll by gesture.)
+- repeat:
+    times: 7
+    commands:
+      - swipe:
+          start: 50%, 78%
+          end: 50%, 22%
+          duration: 350
+- waitForAnimationToEnd:
+    timeout: 4000
+- back
+- assertVisible: "Finished: moved to History"
+- assertVisible: "Nothing saved"
+- tapOn:
+    id: "tab-history"
+- assertVisible: "Chancellor raises income tax threshold in autumn budget"
+
+# Swipe left: not interested. The card goes; undo brings it back.
+- tapOn:
+    id: "tab-feed"
+# The snackbar takes touches while it is up; let it go first.
+- extendedWaitUntil:
+    notVisible:
+      id: "snackbar"
+    timeout: 10000
+- swipe:
+    from:
+      text: "NHS waiting list falls for third month in a row"
+    direction: LEFT
+- assertVisible:
+    id: "snackbar-action"
+- assertNotVisible: "NHS waiting list falls for third month in a row"
+- tapOn:
+    id: "snackbar-action"
+- assertVisible: "NHS waiting list falls for third month in a row"
+
+# Long press: Why am I seeing this, and More like this.
+- extendedWaitUntil:
+    notVisible:
+      id: "snackbar"
+    timeout: 10000
+- longPressOn: "NHS waiting list falls for third month in a row"
+- assertVisible: "More like this"
+- tapOn:
+    id: "menu-why"
+- assertVisible:
+    id: "why-box"
+- tapOn:
+    id: "menu-more"
+- assertVisible: "You will see more like this"
+
+# An article whose page cannot be extracted falls back to the adapter body, not an error.
+- scrollUntilVisible:
+    element: "Schools to get new guidance on phones in classrooms"
+    direction: DOWN
+- tapOn: "Schools to get new guidance on phones in classrooms"
+# (Android does not reliably expose a WebView's text on later visits, so the reader reports where
+# its text came from as a native test ID: extract, api or live.)
+- extendedWaitUntil:
+    visible:
+      id: "reader-body-api"
+    timeout: 30000
+- back
+- tapOn: "Schools to get new guidance on phones in classrooms"
+- extendedWaitUntil:
+    visible:
+      id: "reader-body-api"
+    timeout: 30000

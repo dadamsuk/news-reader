@@ -1,0 +1,82 @@
+# Setup validates keys; the first refresh fills the feed; second sources and Right press appear.
+appId: net.dsc.newsreader
+---
+- runScript: scripts/reset-mock.js
+- clearState
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "setup-screen"
+    timeout: 60000
+- openLink: "newsreader://e2e?action=mock&host=10.0.2.2:8787"
+- extendedWaitUntil:
+    visible:
+      id: "setup-source-guardian"
+    timeout: 30000
+
+# A wrong key is rejected by the test call.
+- tapOn:
+    id: "setup-openrouter"
+- inputText: "sk-or-wrong"
+- tapOn:
+    id: "setup-source-guardian"
+- inputText: "nope"
+- hideKeyboard
+- tapOn:
+    id: "setup-check"
+- extendedWaitUntil:
+    visible: "OpenRouter rejected this key."
+    timeout: 20000
+- assertVisible: "Guardian rejected this key."
+
+# Correct keys pass and the app opens on the feed.
+- tapOn:
+    id: "setup-openrouter"
+- eraseText: 30
+- inputText: "sk-or-e2e"
+- tapOn:
+    id: "setup-source-guardian"
+- eraseText: 30
+- inputText: "e2e-guardian"
+- hideKeyboard
+- tapOn:
+    id: "setup-check"
+- extendedWaitUntil:
+    visible: "Chancellor raises income tax threshold in autumn budget"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Updated.*"
+    timeout: 90000
+
+# The top story has a second source from an outlet furthest from the Guardian's lean, with an angle note.
+- assertVisible:
+    id: "feed-list"
+- assertVisible: ".*(Leads on the gambling duty rise|Frames the duty rise as a blow to punters).*"
+
+# Right press: stories from two or more right-leaning outlets that the Guardian has not run.
+- tapOn:
+    id: "feedtab-right"
+- assertVisible: "3 OUTLETS"
+- assertVisible: "Protesters are reported to have gathered.*"
+- assertVisible: "GB News"
+- assertVisible: "Daily Express"
+- scrollUntilVisible:
+    element: "A council is reported to have ordered.*"
+    direction: DOWN
+- assertVisible: "2 OUTLETS"
+- assertNotVisible: ".*BBC presenter in new bias row.*"
+
+# Debug lists the run with its steps.
+- tapOn:
+    id: "settings-button"
+- scrollUntilVisible:
+    element:
+      id: "settings-debug"
+    direction: DOWN
+- tapOn:
+    id: "settings-debug"
+- assertVisible:
+    id: "debug-run-setup"
+- tapOn:
+    id: "debug-run-setup"
+- assertVisible: ".*1-2 Fetch and de-duplicate.*"
