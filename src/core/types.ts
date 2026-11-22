@@ -7,7 +7,9 @@ export type Tone = 'news' | 'comment' | 'analysis' | 'live';
 export type Surface = 'feed' | 'second_source' | 'digest' | 'bubble' | 'coverage';
 export type InteractionKind =
   | 'open' | 'read' | 'save' | 'unsave' | 'dismiss' | 'more' | 'less' | 'bounce' | 'ignored'
-  | 'interested' | 'less_source' | 'less_section' | 'less_topic';
+  | 'interested' | 'less_source' | 'less_section' | 'less_topic'
+  /** Open for five seconds or more: the card leaves the feeds (History still lists it). Teaches nothing by itself. */
+  | 'viewed';
 
 /** Why a swipe asked for less: one part of the article, not all of it. */
 export type LessReason = 'source' | 'section' | 'topic';

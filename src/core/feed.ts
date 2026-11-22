@@ -200,7 +200,9 @@ const FEED_SELECT = `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at
             (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
             EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested,
             EXISTS (SELECT 1 FROM story_article sa WHERE sa.article_id = a.id) following`;
-const NOT_HIDDEN = `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`;
+/** An article open for five seconds or more has been read as far as the feeds are concerned. */
+const FEED_HIDING: InteractionKind[] = [...HIDING_KINDS, 'viewed'];
+const NOT_HIDDEN = `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${FEED_HIDING.map((k) => `'${k}'`).join(',')}))`;
 const likeTerm = (t: string) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 const LIKE_ANY = "(a.title LIKE ? ESCAPE '\\' OR a.summary LIKE ? ESCAPE '\\' OR a.tags LIKE ? ESCAPE '\\' OR a.section LIKE ? ESCAPE '\\')";
 
@@ -437,7 +439,7 @@ export async function loadBubble(db: Db, settings: Settings, sessionId: string, 
      LEFT JOIN read_later rl ON rl.article_id = a.id
      WHERE a.ready_at IS NOT NULL
        AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface = 'bubble'))
-       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${HIDING_KINDS.map((k) => `'${k}'`).join(',')}))`,
+       AND ${NOT_HIDDEN}`,
     [now - FEED_WINDOW_MS, sessionId],
   );
   const neutralSettings = { ...settings, weightA: 0, weightS: 0 };
@@ -531,6 +533,8 @@ export const READ_SCROLL_PCT = 60;
 export const READ_SECONDS = 45;
 export const BOUNCE_SECONDS = 3;
 export const DONE_SCROLL_PCT = 70;
+/** Open this long, an article moves out of the feeds: it is then only in History (and Read later, if saved). */
+export const VIEWED_SECONDS = 5;
 
 /** What leaving the reader means for learning: read, bounced, or nothing. */
 export function classifyReading(dwellSeconds: number, maxScrollPct: number): 'read' | 'bounce' | null {
@@ -541,10 +545,13 @@ export function classifyReading(dwellSeconds: number, maxScrollPct: number): 're
   return null;
 }
 
-/** Called when the reader closes. Returns whether a Read later item was marked done. */
+/**
+ * Called when the reader closes. Returns whether a Read later item was marked done, and whether
+ * the article was open long enough to leave the feeds.
+ */
 export async function recordReading(
   db: Db, articleId: number, dwellSeconds: number, maxScrollPct: number, now: number,
-): Promise<{ kind: 'read' | 'bounce' | null; done: boolean }> {
+): Promise<{ kind: 'read' | 'bounce' | null; done: boolean; viewed: boolean }> {
   const kind = classifyReading(dwellSeconds, maxScrollPct);
   if (kind) {
     const already = await db.get('SELECT 1 x FROM interaction WHERE article_id = ? AND kind = ?', [articleId, kind]);
@@ -556,7 +563,11 @@ export async function recordReading(
   }
   let done = false;
   if (maxScrollPct >= DONE_SCROLL_PCT && dwellSeconds >= 5) done = await markDone(db, articleId, now);
-  return { kind, done };
+  const viewed = dwellSeconds >= VIEWED_SECONDS;
+  if (viewed && !(await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'viewed'", [articleId]))) {
+    await logInteraction(db, articleId, 'viewed', now, dwellSeconds, maxScrollPct);
+  }
+  return { kind, done, viewed };
 }
 
 export async function saveForLater(db: Db, articleId: number, sessionId: string, now: number): Promise<void> {
@@ -688,6 +699,20 @@ export async function loadHistory(db: Db, now: number, search = '', limit = 300)
        ${q ? "AND a.title LIKE ? ESCAPE '\\'" : ''}
      ORDER BY at DESC, a.id DESC LIMIT ?`,
     q ? [now - 14 * DAY, now - 14 * DAY, like, limit] : [now - 14 * DAY, now - 14 * DAY, limit],
+  );
+  return rows.map((r) => ({ article: rowToArticle(r), sourceName: r.source_name ?? '', at: r.at, offline: !!r.has_body }));
+}
+
+/**
+ * More: the newest headlines from the other (perspective) sources, exactly as published. No ranking,
+ * no seen rule, no mute list.
+ */
+export async function loadMore(db: Db, limit = 300): Promise<ListRow[]> {
+  const rows = await db.all<any>(
+    `SELECT ${ARTICLE_COLS}, s.name source_name, a.published_at at
+     FROM article a JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1
+     ORDER BY a.published_at DESC, a.id DESC LIMIT ?`,
+    [limit],
   );
   return rows.map((r) => ({ article: rowToArticle(r), sourceName: r.source_name ?? '', at: r.at, offline: !!r.has_body }));
 }

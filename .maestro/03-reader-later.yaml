@@ -1,4 +1,4 @@
-# Reader with text and pictures, Read later with undo, done at 70% scroll, fallback to the API body.
+# Reader with text and pictures, Read later, swipe right to dismiss with undo, done at 70% scroll, fallback to the API body.
 appId: net.dsc.newsreader
 ---
 - runFlow: common/setup.yaml
@@ -24,14 +24,16 @@ appId: net.dsc.newsreader
 - assertVisible: "Saved to Read later"
 - back
 
-# Swipe right saves, with undo.
+# Swipe right dismisses the card; undo brings it back.
 - swipe:
     from:
       text: "Rail strike to halt most trains across northern England next week"
     direction: RIGHT
-- assertVisible: "Saved to Read later"
+- assertVisible: "Not interested"
+- assertNotVisible: "Rail strike to halt most trains across northern England next week"
 - tapOn:
     id: "snackbar-action"
+- assertVisible: "Rail strike to halt most trains across northern England next week"
 - tapOn:
     id: "tab-later"
 - assertVisible: "Chancellor raises income tax threshold in autumn budget"
@@ -117,6 +119,9 @@ appId: net.dsc.newsreader
       id: "reader-body-api"
     timeout: 30000
 - back
+# An article open for five seconds leaves the feed, so the second visit is from History.
+- tapOn:
+    id: "tab-history"
 - tapOn: "Schools to get new guidance on phones in classrooms"
 - extendedWaitUntil:
     visible:

@@ -7,7 +7,7 @@ import { ageLabel } from '../core/util';
 import { SwipeRow } from './SwipeRow';
 import { useTheme } from './theme';
 
-/** Compact article row for Read later and History. Swiping (when enabled) marks it done. */
+/** Compact article row for Read later, History and More. Swiping (when enabled) marks it done. */
 function ListRowBase({
   row, now, onPress, onSwipe, swipeLabel, whenLabel, testID,
 }: {
@@ -28,7 +28,7 @@ function ListRowBase({
       <View style={{ flex: 1 }}>
         <Text style={[styles.meta, { color: t.accent }]} numberOfLines={1}>
           {row.sourceName.toUpperCase()}
-          <Text style={{ color: t.faint, fontWeight: '500' }}>{`  ·  ${whenLabel} ${ageLabel(row.at, now)}`}</Text>
+          <Text style={{ color: t.faint, fontWeight: '500' }}>{`  ·  ${whenLabel ? `${whenLabel} ` : ''}${ageLabel(row.at, now)}`}</Text>
         </Text>
         <Text style={[styles.title, { color: t.text }]} numberOfLines={3}>{a.title}</Text>
         {row.offline ? (

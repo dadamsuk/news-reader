@@ -12,7 +12,7 @@ export interface CardHandlers {
   onSave: (card: FeedCard) => void;
   /** Thumbs-up: interested, but not reading or saving it. Tapping again takes it back. */
   onInterested: (card: FeedCard) => void;
-  /** Thumbs-down: a general "not interested". The card goes. */
+  /** Swipe right, or thumbs-down: a general "not interested". The card goes. */
   onDismiss: (card: FeedCard) => void;
   /** Swipe left: "Show me less like this, because…" (asks for the reason). */
   onLessBecause: (card: FeedCard) => void;
@@ -22,13 +22,13 @@ export interface CardHandlers {
 
 const TONE_LABEL: Record<string, string> = { comment: 'Comment', analysis: 'Analysis', live: 'Live' };
 
-function SwipeAction({ t, kind }: { t: Theme; kind: 'save' | 'dismiss' }) {
-  const save = kind === 'save';
+function SwipeAction({ t, kind }: { t: Theme; kind: 'dismiss' | 'less' }) {
+  const dismiss = kind === 'dismiss';
   return (
-    <View style={[styles.action, { backgroundColor: save ? t.save : t.dismiss, alignItems: save ? 'flex-start' : 'flex-end' }]}>
+    <View style={[styles.action, { backgroundColor: t.dismiss, alignItems: dismiss ? 'flex-start' : 'flex-end' }]}>
       <View style={styles.actionInner}>
-        <Ionicons name={save ? 'bookmark' : 'close-circle'} size={22} color="#fff" />
-        <Text style={styles.actionText}>{save ? 'Read later' : 'Less like this…'}</Text>
+        <Ionicons name={dismiss ? 'thumbs-down' : 'close-circle'} size={22} color="#fff" />
+        <Text style={styles.actionText}>{dismiss ? 'Dismiss' : 'Less like this…'}</Text>
       </View>
     </View>
   );
@@ -39,8 +39,8 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
   const a = card.article;
   const tone = a.tone ? TONE_LABEL[a.tone] : null;
 
-  // Swipe right saves (the card springs back and stays); swipe left asks what to see less of.
-  const onSwipeRight = useCallback(() => handlers.onSave(card), [card, handlers]);
+  // Swipe right dismisses (the card goes); swipe left asks what to see less of.
+  const onSwipeRight = useCallback(() => handlers.onDismiss(card), [card, handlers]);
   const onSwipeLeft = useCallback(() => handlers.onLessBecause(card), [card, handlers]);
 
   return (
@@ -48,8 +48,9 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
       <SwipeRow
         onSwipeRight={onSwipeRight}
         onSwipeLeft={onSwipeLeft}
-        renderRightSwipe={() => <SwipeAction t={t} kind="save" />}
-        renderLeftSwipe={() => <SwipeAction t={t} kind="dismiss" />}
+        rightSlidesAway
+        renderRightSwipe={() => <SwipeAction t={t} kind="dismiss" />}
+        renderLeftSwipe={() => <SwipeAction t={t} kind="less" />}
         style={styles.swipeContainer}
       >
         <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
@@ -125,10 +126,7 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
               </Pressable>
             </View>
             <View style={styles.bodyRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.title, { color: t.text }]} numberOfLines={4}>{a.title}</Text>
-                {a.summary ? <Text style={[styles.summary, { color: t.muted }]} numberOfLines={2}>{a.summary}</Text> : null}
-              </View>
+              <Text style={[styles.title, { color: t.text }]} numberOfLines={5}>{a.title}</Text>
               {a.imageUrl ? (
                 <Image
                   source={{ uri: a.imageUrl }}
@@ -140,6 +138,8 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
                 />
               ) : null}
             </View>
+            {/* The standfirst runs the full width of the card, under the headline and picture. */}
+            {a.summary ? <Text style={[styles.summary, { color: t.muted }]} numberOfLines={3}>{a.summary}</Text> : null}
           </Pressable>
           {card.second ? (
             <Pressable
@@ -197,8 +197,8 @@ const styles = StyleSheet.create({
   // Filled: here because it fits. Hollow: here because it is recent (or an exploration pick).
   fitDot: { width: 7, height: 7, borderRadius: 4, borderWidth: 1.2, marginRight: 7, opacity: 0.85 },
   bodyRow: { flexDirection: 'row', gap: 12 },
-  title: { fontSize: 18, lineHeight: 23, fontWeight: '700', fontFamily: 'serif' },
-  summary: { fontSize: 14, lineHeight: 20, marginTop: 6 },
+  title: { flex: 1, fontSize: 18, lineHeight: 23, fontWeight: '700', fontFamily: 'serif' },
+  summary: { fontSize: 14, lineHeight: 20, marginTop: 8 },
   thumb: { width: 92, height: 92, borderRadius: 8 },
   strip: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth },
   stripText: { flex: 1, fontSize: 13, lineHeight: 18 },

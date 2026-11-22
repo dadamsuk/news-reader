@@ -26,12 +26,12 @@ appId: net.dsc.newsreader
     id: "setup-skip"
 - extendedWaitUntil:
     visible:
-      id: "settings-button"
+      id: "tab-settings"
     timeout: 30000
 - openLink: "newsreader://e2e?action=guardianrss"
 - extendedWaitUntil:
     visible:
-      id: "settings-button"
+      id: "tab-settings"
     timeout: 30000
 
 # Let the refresh that setup started finish (the Guardian has no key yet, so it fetched the rest).
@@ -41,7 +41,9 @@ appId: net.dsc.newsreader
 
 # Then a refresh with the Guardian included, from the Debug screen so its timings can be read there.
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-data"
 - scrollUntilVisible:
     element:
       id: "settings-debug"
@@ -55,7 +57,8 @@ appId: net.dsc.newsreader
       id: "debug-run-manual"
     timeout: 20000
 - back
-- back
+- tapOn:
+    id: "tab-feed"
 - extendedWaitUntil:
     visible:
       id: "card-.*"

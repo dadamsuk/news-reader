@@ -24,8 +24,10 @@ const SPRING = { damping: 30, stiffness: 300, overshootClamping: true } as const
 
 export interface SwipeRowProps {
   children: ReactNode;
-  /** Swiping right (finger moves right). The row springs back to rest. */
+  /** Swiping right (finger moves right). The row springs back to rest, unless `rightSlidesAway`. */
   onSwipeRight?: () => void;
+  /** A right swipe removes the row: it slides off like a left swipe, and comes back if it is not removed. */
+  rightSlidesAway?: boolean;
   /** Swiping left (finger moves left). The row slides away; it comes back if it is not removed. */
   onSwipeLeft?: () => void;
   /** Shown behind the row while it is dragged right. */
@@ -38,7 +40,7 @@ export interface SwipeRowProps {
 }
 
 export function SwipeRow({
-  children, onSwipeRight, onSwipeLeft, renderRightSwipe, renderLeftSwipe, threshold = DEFAULT_THRESHOLD, style,
+  children, onSwipeRight, onSwipeLeft, rightSlidesAway = false, renderRightSwipe, renderLeftSwipe, threshold = DEFAULT_THRESHOLD, style,
 }: SwipeRowProps) {
   const tx = useSharedValue(0);
   const width = useSharedValue(0);
@@ -69,8 +71,16 @@ export function SwipeRow({
       const x = e.translationX + 0.08 * e.velocityX;
       if (x > threshold && canRight) {
         committed.value = true;
-        tx.value = withSpring(0, SPRING);
-        scheduleOnRN(fireRight);
+        if (rightSlidesAway) {
+          tx.value = withTiming(width.value || 500, { duration: 160 }, (done) => {
+            if (!done) return;
+            scheduleOnRN(fireRight);
+            tx.value = withDelay(600, withTiming(0, { duration: 0 }));
+          });
+        } else {
+          tx.value = withSpring(0, SPRING);
+          scheduleOnRN(fireRight);
+        }
       } else if (x < -threshold && canLeft) {
         committed.value = true;
         tx.value = withTiming(-(width.value || 500), { duration: 160 }, (done) => {

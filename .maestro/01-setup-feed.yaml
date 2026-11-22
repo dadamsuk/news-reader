@@ -68,7 +68,9 @@ appId: net.dsc.newsreader
 
 # Debug lists the run with its steps.
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-data"
 - scrollUntilVisible:
     element:
       id: "settings-debug"

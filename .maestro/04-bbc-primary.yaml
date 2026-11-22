@@ -4,7 +4,9 @@ appId: net.dsc.newsreader
 ---
 - runFlow: common/setup.yaml
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-sources"
 - scrollUntilVisible:
     element:
       id: "settings-sources"
@@ -38,7 +40,8 @@ appId: net.dsc.newsreader
     id: "source-save"
 - assertVisible: "Primary: the For you feed"
 - back
-- back
+- tapOn:
+    id: "tab-feed"
 
 # The feed is now BBC only. (BBC articles already shown as second-source strips do not come back as cards.)
 - assertNotVisible: "Chancellor raises income tax threshold in autumn budget"

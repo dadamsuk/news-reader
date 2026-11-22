@@ -4,7 +4,9 @@ appId: net.dsc.newsreader
 ---
 - runFlow: common/setup.yaml
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-ai"
 - scrollUntilVisible:
     element:
       id: "settings-budget"
@@ -18,7 +20,8 @@ appId: net.dsc.newsreader
 - extendedWaitUntil:
     visible: "Budget reached.*"
     timeout: 10000
-- back
+- tapOn:
+    id: "tab-feed"
 - assertVisible:
     id: "budget-banner"
 
@@ -40,7 +43,9 @@ appId: net.dsc.newsreader
 
 # The broken source is red, with its error; the others are fine.
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-sources"
 - scrollUntilVisible:
     element:
       id: "settings-sources"

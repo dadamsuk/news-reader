@@ -1,6 +1,6 @@
 import {
   SESSION_GAP_MS, classifyReading, dismiss, ensureSession, highWaterMark, loadDigest, loadFeed, loadHistory,
-  loadReadLater, noteBackground, recordImpressions, recordOpen, recordReading, saveForLater, undoDismiss, unsave,
+  loadMore, loadReadLater, noteBackground, recordImpressions, recordOpen, recordReading, saveForLater, undoDismiss, unsave,
 } from '../src/core/feed';
 import { loadSettings } from '../src/core/settings';
 import { HOUR, SRC, feedUrl, setup } from './helpers/world';
@@ -190,6 +190,47 @@ describe('actions', () => {
     expect((await recordReading(db, a, 60, 70, world.now + HOUR)).done).toBe(true);
     expect(await loadReadLater(db)).toHaveLength(0);
     expect((await loadHistory(db, world.now + HOUR)).map((r) => r.article.title)).toContain('Long read');
+  });
+
+  test('an article open for 5 seconds leaves the feed at once and is in History', async () => {
+    const { db, world, run } = await setup([]);
+    world.addGuardian([{ title: 'Glanced at', topic: 1, hoursAgo: 1 }, { title: 'Opened', topic: 2, hoursAgo: 2 }]);
+    await run();
+    const s1 = await ensureSession(db, world.now);
+    const feed = await loadFeed(db, await loadSettings(db), s1.sessionId, world.now);
+    const [glanced, opened] = ['Glanced at', 'Opened'].map((title) => feed.find((c) => c.article.title === title)!.article.id);
+
+    // Under 5 seconds: still in this session's feed.
+    await recordOpen(db, glanced, s1.sessionId, 'feed', world.now);
+    expect((await recordReading(db, glanced, 4.9, 0, world.now + 5000)).viewed).toBe(false);
+    expect(await feedTitles(db, world.now + 5000, s1.sessionId)).toContain('Glanced at');
+
+    // 5 seconds: gone from the feed in the same session, whatever the scroll depth, and listed in History.
+    await recordOpen(db, opened, s1.sessionId, 'feed', world.now);
+    expect((await recordReading(db, opened, 5, 0, world.now + 5000)).viewed).toBe(true);
+    await recordReading(db, opened, 30, 10, world.now + 60_000); // reopened from History: recorded once
+    expect(await feedTitles(db, world.now + 60_000, s1.sessionId)).toEqual(['Glanced at']);
+    expect((await loadHistory(db, world.now + 60_000)).map((r) => r.article.title)).toContain('Opened');
+    const n = await db.get<{ n: number }>("SELECT COUNT(*) n FROM interaction WHERE article_id = ? AND kind = 'viewed'", [opened]);
+    expect(n!.n).toBe(1);
+  });
+
+  test('More lists every headline from the other sources, newest first, seen or not', async () => {
+    const { db, world, run } = await setup([SRC.rss('The Telegraph', 'right'), SRC.rss('Daily Mail', 'right')]);
+    world.addGuardian([{ title: 'Primary story', topic: 1, hoursAgo: 1 }]);
+    world.addFeed(feedUrl('The Telegraph'), [{ title: 'Telegraph older', topic: 2, hoursAgo: 5 }, { title: 'Telegraph newest', topic: 3, hoursAgo: 1 }]);
+    world.addFeed(feedUrl('Daily Mail'), [{ title: 'Mail middle', topic: 4, hoursAgo: 3 }]);
+    await run();
+    const titles = async () => (await loadMore(db)).map((r) => r.article.title);
+    expect(await titles()).toEqual(['Telegraph newest', 'Mail middle', 'Telegraph older']);
+
+    // Seeing or dismissing one changes nothing here.
+    const s1 = await ensureSession(db, world.now);
+    const rows = await loadMore(db);
+    await recordImpressions(db, [{ articleId: rows[0].article.id, surface: 'coverage' }], s1.sessionId, world.now);
+    await dismiss(db, rows[1].article.id, s1.sessionId, world.now);
+    await ensureSession(db, world.now + HOUR, true);
+    expect(await titles()).toEqual(['Telegraph newest', 'Mail middle', 'Telegraph older']);
   });
 
   test('what counts as read, bounced or neither', () => {

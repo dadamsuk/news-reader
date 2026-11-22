@@ -98,7 +98,7 @@ export default function TopicsScreen() {
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView testID="topics-screen" keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 60 }}>
         <Text style={[styles.intro, { color: t.muted }]}>
-          A muted word or phrase hides matching stories from For you, Right press, Outside your bubble and the briefing. A watched
+          A muted word or phrase hides matching stories from For you, Right, Outside and the briefing. A watched
           one puts matching stories at the top of For you, from any source. Whole words are matched, in headlines, standfirsts,
           sections and topics.
         </Text>

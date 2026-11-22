@@ -139,8 +139,10 @@ Thumbnail, headline, two lines of standfirst, section, age ("2h"), and a comment
 ### Actions
 
 - Tap: read now, in the reader.
-- Swipe right, or the bookmark icon: read later. A snackbar offers undo.
-- Swipe left: not interested. Removes the card from this session and counts as a negative signal.
+- The bookmark icon: read later. A snackbar offers undo.
+- Swipe right, or the thumbs-down icon: dismiss (not interested). Removes the card and counts as a negative signal. A snackbar offers undo.
+- Swipe left: "Show me less like this, because…", then removes the card.
+- An article that has been open for 5 seconds leaves the feed at once (it does not wait for the session to end). It is then in History.
 - Long press: menu with More like this, Less like this, Why am I seeing this, Share link.
 - Tap the second-source strip: opens that article (reader for free sources, in-app browser for paywalled ones).
 
@@ -275,14 +277,14 @@ Haiku 4.5 is listed on OpenRouter at [$1 per million input tokens and $5 per mil
 
 ### Screens
 
-1. **Feed**, with two tabs: For you (primary sources) and Right press. Pull to refresh. Last-refreshed time in the top bar.
+1. **Feed**, with tabs: For you (primary sources), Right, Outside, Following and More... (every headline from the other sources, newest first, with no ranking or filtering). Pull to refresh. Last-refreshed time in a line under the tabs. Tapping the Feed button while the feed is showing lists the categories; picking one shows only that category's cards in For you and Outside.
 2. **Reader** (see Feed section).
 3. **Read later**.
 4. **History**, with search.
 5. **Settings**: OpenRouter key; Sources (list with health dots, then a form per source for every field in the source record, plus Test, Add, Duplicate, Delete, and JSON import and export); second-source preference; model IDs; monthly budget and spend so far; refresh interval; Wi-Fi-only prefetch; text size; ranking weights and thresholds; Reset learning; Export database (shares the SQLite file); Debug.
 6. **Debug**: last 20 refresh runs with per-step timing and errors; recent clusters with member articles and similarity scores; recent match and digest decisions with the LLM's JSON.
 
-Bottom tabs: Feed, Read later, History. Settings from the top bar. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
+Bottom tabs: Feed, Read later, History, Settings. There is no title bar. Settings is split into tabs: General, Sources, AI and budget, Learning, Data. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
 
 ## Acceptance criteria
 
@@ -326,7 +328,7 @@ The build is done when every item below passes on a real Android phone and on an
 - [ ] Tapping a Guardian card opens the in-app reader with headline, byline, lead image, body text and inline photos.
 - [ ] If extraction fails, the reader falls back to the adapter's body and thumbnail instead of an error. (test)
 - [ ] A source with reader mode `browser` opens in Chrome Custom Tabs on Android and SFSafariViewController on iOS.
-- [ ] Swipe right saves to Read later with undo; saved items open with images in airplane mode.
+- [ ] The bookmark saves to Read later with undo; swipe right dismisses with undo; saved items open with images in airplane mode.
 - [ ] Reading to 70% scroll marks a Read later item done and moves it to History.
 
 ### Second source and Right press

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { whyThis, type WhyLine } from '../core/ranking';
 import type { FeedCard, LessReason } from '../core/types';
@@ -176,6 +176,46 @@ export function LessBecauseSheet({ card, onClose, onPick }: {
   );
 }
 
+/** Tapping Feed again: pick one category to show, or all of them. */
+export function CategorySheet({ visible, categories, total, selected, onPick, onClose }: {
+  visible: boolean; categories: { name: string; count: number }[]; total: number; selected: string | null;
+  onPick: (category: string | null) => void; onClose: () => void;
+}) {
+  const t = useTheme();
+  const insets = useSafeAreaInsets();
+  if (!visible) return null;
+  const option = (name: string | null, label: string, count: number, testID: string) => {
+    const on = selected === name;
+    return (
+      <Pressable
+        key={testID}
+        testID={testID}
+        accessibilityRole="button"
+        accessibilityState={{ selected: on }}
+        onPress={() => { onPick(name); onClose(); }}
+        android_ripple={{ color: t.border }}
+        style={styles.menuItem}
+      >
+        <Ionicons name={on ? 'radio-button-on' : 'radio-button-off'} size={20} color={on ? t.accent : t.faint} />
+        <Text style={[styles.menuLabel, { flex: 1, color: t.text, fontWeight: on ? '700' : '400' }]} numberOfLines={1}>{label}</Text>
+        <Text style={{ color: t.faint, fontSize: 14 }}>{count}</Text>
+      </Pressable>
+    );
+  };
+  return (
+    <Modal transparent animationType="fade" visible onRequestClose={onClose} statusBarTranslucent>
+      <Pressable testID="category-backdrop" style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
+      <View testID="category-sheet" style={[styles.sheet, { backgroundColor: t.card, paddingBottom: insets.bottom + 10, maxHeight: '75%' }]}>
+        <Text style={[styles.sheetHeading, { color: t.text, paddingBottom: 8 }]}>Show a category</Text>
+        <ScrollView>
+          {option(null, 'All categories', total, 'category-all')}
+          {categories.map((c, i) => option(c.name, c.name, c.count, `category-${i}`))}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 export function BudgetBanner() {
   const t = useTheme();
   const over = useStore((s) => s.overBudget);
@@ -184,7 +224,7 @@ export function BudgetBanner() {
     <View testID="budget-banner" style={[styles.banner, { backgroundColor: t.banner }]}>
       <Ionicons name="alert-circle-outline" size={16} color={t.bannerText} />
       <Text style={[styles.bannerText, { color: t.bannerText }]}>
-        Monthly LLM budget reached. Angle notes and Right press summaries are paused until the 1st.
+        Monthly LLM budget reached. Angle notes and Right summaries are paused until the 1st.
       </Text>
     </View>
   );

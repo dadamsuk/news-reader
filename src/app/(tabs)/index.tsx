@@ -1,17 +1,18 @@
 import Constants from 'expo-constants';
-import { router } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { router, useNavigation } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
-  dismiss, lessBecause, lessLikeThis, loadBubble, loadDigest, loadFeed, markInterested, moreLikeThis, saveForLater,
-  undoDismiss, undoLess, undoLessBecause, unmarkInterested, unsave,
+  dismiss, lessBecause, lessLikeThis, loadBubble, loadDigest, loadFeed, loadMore, markInterested, moreLikeThis, saveForLater,
+  undoDismiss, undoLess, undoLessBecause, unmarkInterested, unsave, type ListRow as MoreRow,
 } from '../../core/feed';
 import { dismissBriefing, loadBriefing } from '../../core/briefing';
 import { followStory, loadStories, storyOfArticle } from '../../core/stories';
 import type {
   Briefing, BriefingItem, BubbleItem, DigestItem, DigestOutlet, FeedCard, LessReason, StoryView, Surface,
 } from '../../core/types';
-import { errMsg } from '../../core/util';
+import { ageLabel, errMsg } from '../../core/util';
 import { getDb } from '../../platform/db';
 import { openArticle } from '../../platform/open';
 import { bodyDeps, launchedIntoFeed, runRefresh, startSession } from '../../platform/runner';
@@ -21,17 +22,37 @@ import { ArticleCard, type CardHandlers } from '../../ui/ArticleCard';
 import { BriefingCard } from '../../ui/BriefingCard';
 import { StoryCard } from '../../ui/StoryCard';
 import { DigestCard } from '../../ui/DigestCard';
+import { ListRow } from '../../ui/ListRow';
 import { Button, Empty } from '../../ui/kit';
-import { BudgetBanner, CardMenu, LessBecauseSheet, topicLabels } from '../../ui/overlays';
+import { BudgetBanner, CardMenu, CategorySheet, LessBecauseSheet, topicLabels } from '../../ui/overlays';
 import { VIEWABILITY, auditReset, auditScroll, auditSetHeight, auditSetOrder, useSeenTracker, type SeenEntry } from '../../ui/seen';
 import { useTheme } from '../../ui/theme';
 
 const AUDIT = !!Constants.expoConfig?.extra?.e2e;
 const LIST_PADDING_TOP = 12;
 
-type Tab = 'foryou' | 'right' | 'bubble' | 'following';
+type Tab = 'foryou' | 'right' | 'bubble' | 'following' | 'more';
 
-/** The strip under an Outside your bubble card: how widely it is covered and what pushed it down. */
+/** When the sources were last fetched (there is no title bar to carry it). */
+function RefreshStatus() {
+  const t = useTheme();
+  const last = useStore((s) => s.lastRefreshAt);
+  const refreshing = useStore((s) => s.refreshing);
+  const step = useStore((s) => s.refreshStep);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  // The refresh may have finished after the last tick: never show a negative age.
+  const age = last ? ageLabel(last, Math.max(now, last)) : null;
+  const status = refreshing
+    ? `Refreshing${step ? `: ${step.toLowerCase()}` : ''}…`
+    : age ? (age === 'now' ? 'Updated just now' : `Updated ${age} ago`) : 'Not refreshed yet';
+  return <Text testID="refresh-status" style={{ flex: 1, color: t.faint, fontSize: 12 }} numberOfLines={1}>{status}</Text>;
+}
+
+/** The strip under an Outside card: how widely it is covered and what pushed it down. */
 function bubbleNote(b: BubbleItem): string {
   const parts = [`Covered by ${b.outletCount} outlets.`];
   if (b.personalRank >= 0) parts.push(`#${b.personalRank + 1} for you, #${b.neutralRank + 1} on news value.`);
@@ -45,10 +66,15 @@ export default function FeedScreen() {
   const sessionVersion = useStore((s) => s.sessionVersion);
   const dataVersion = useStore((s) => s.dataVersion);
   const refreshing = useStore((s) => s.refreshing);
+  const navigation = useNavigation();
   const [tab, setTab] = useState<Tab>('foryou');
-  const [cards, setCards] = useState<FeedCard[]>([]);
+  // One category (an article's section) to show in For you and Outside; null shows them all.
+  const [category, setCategory] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [allCards, setCards] = useState<FeedCard[]>([]);
   const [digest, setDigest] = useState<DigestItem[]>([]);
-  const [bubble, setBubble] = useState<BubbleItem[]>([]);
+  const [allBubble, setBubble] = useState<BubbleItem[]>([]);
+  const [more, setMore] = useState<MoreRow[]>([]);
   const [stories, setStories] = useState<StoryView[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -60,6 +86,7 @@ export default function FeedScreen() {
   const digestRef = useRef<FlatList<DigestItem>>(null);
   const bubbleRef = useRef<FlatList<BubbleItem>>(null);
   const storiesRef = useRef<FlatList<StoryView>>(null);
+  const moreRef = useRef<FlatList<MoreRow>>(null);
   // The briefing sits above the first card; the seen-rule audit needs its height.
   const headerH = useRef(0);
   const loadSeq = useRef(0);
@@ -69,12 +96,13 @@ export default function FeedScreen() {
     const db = await getDb();
     const s = getState();
     const at = Date.now();
-    const [f, d, b, st, br] = await Promise.all([
+    const [f, d, b, st, br, mo] = await Promise.all([
       loadFeed(db, s.settings, s.sessionId, at),
       loadDigest(db, s.settings, s.sessionId, at),
       loadBubble(db, s.settings, s.sessionId, at),
       loadStories(db),
       loadBriefing(db, at),
+      loadMore(db),
     ]);
     if (seq !== loadSeq.current) return; // a newer load is on its way
     setCards(f);
@@ -82,6 +110,7 @@ export default function FeedScreen() {
     setBubble(b);
     setStories(st);
     setBriefing(br);
+    setMore(mo);
     setNow(at);
     setLoaded(true);
     // Only a launch that went straight to the feed is a fair measure (not one that began at setup).
@@ -98,8 +127,38 @@ export default function FeedScreen() {
     digestRef.current?.scrollToOffset({ offset: 0, animated: false });
     bubbleRef.current?.scrollToOffset({ offset: 0, animated: false });
     storiesRef.current?.scrollToOffset({ offset: 0, animated: false });
+    moreRef.current?.scrollToOffset({ offset: 0, animated: false });
     if (AUDIT) auditReset();
   }, [sessionVersion]);
+
+  // ----- category filter -----
+  // Tapping the Feed tab while it is already showing opens the list of categories.
+  useEffect(
+    () => (navigation as any).addListener('tabPress', () => {
+      if (navigation.isFocused()) setPickerOpen(true);
+    }),
+    [navigation],
+  );
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of allCards) {
+      const sec = c.article.section;
+      if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+    }
+    // The one in use stays in the list even when its last card has gone.
+    if (category && !counts.has(category)) counts.set(category, 0);
+    return Array.from(counts, ([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [allCards, category]);
+  const cards = useMemo(() => (category ? allCards.filter((c) => c.article.section === category) : allCards), [allCards, category]);
+  const bubble = useMemo(() => (category ? allBubble.filter((b) => b.card.article.section === category) : allBubble), [allBubble, category]);
+  const pickCategory = useCallback((c: string | null) => {
+    setCategory(c);
+    // The filter applies to the two lists of cards; from any other tab, go to For you.
+    setTab((cur) => (cur === 'bubble' ? cur : 'foryou'));
+    feedRef.current?.scrollToOffset({ offset: 0, animated: false });
+    bubbleRef.current?.scrollToOffset({ offset: 0, animated: false });
+    if (AUDIT) auditReset();
+  }, []);
 
   // ----- seen rule -----
   const feedEntries = useMemo<SeenEntry[]>(
@@ -129,7 +188,7 @@ export default function FeedScreen() {
   const viewportH = useRef(0);
 
   // ----- actions -----
-  // A story can be in For you and Outside your bubble at once; both lists stay in step.
+  // A story can be in For you and Outside at once; both lists stay in step.
   const patchCard = useCallback((id: number, patch: Partial<FeedCard>) => {
     setCards((prev) => prev.map((c) => (c.article.id === id ? { ...c, ...patch } : c)));
     setBubble((prev) => prev.map((b) => (b.card.article.id === id ? { ...b, card: { ...b.card, ...patch } } : b)));
@@ -273,6 +332,9 @@ export default function FeedScreen() {
   const onOpenOutlet = useCallback((o: DigestOutlet) => {
     openArticle(o.articleId, 'digest').catch(() => showSnack('Could not open the article'));
   }, []);
+  const onOpenMore = useCallback((row: MoreRow) => {
+    openArticle(row.article.id, 'coverage').catch(() => showSnack('Could not open the article'));
+  }, []);
 
   // Pull to refresh fetches the sources again and ends the session: seen cards go and the new
   // ranking starts from the top. The spinner stays until the new stories are ready, but not for
@@ -314,6 +376,10 @@ export default function FeedScreen() {
     ({ item }: { item: StoryView }) => <StoryCard story={item} now={now} onOpen={onOpenStory} />,
     [now, onOpenStory],
   );
+  const renderMore = useCallback(
+    ({ item }: { item: MoreRow }) => <ListRow row={item} now={now} onPress={onOpenMore} whenLabel="" testID={`more-${item.article.id}`} />,
+    [now, onOpenMore],
+  );
   const renderDigest = useCallback(
     ({ item }: { item: DigestItem }) => <DigestCard item={item} now={now} onOpenOutlet={onOpenOutlet} onCoverage={onDigestCoverage} />,
     [now, onOpenOutlet, onDigestCoverage],
@@ -347,10 +413,27 @@ export default function FeedScreen() {
       <View style={[styles.tabs, { backgroundColor: t.card, borderBottomColor: t.border }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsInner}>
           {tabButton('foryou', 'For you', cards.length)}
-          {tabButton('right', 'Right press', digest.filter((d) => d.seenAt == null).length)}
-          {tabButton('bubble', 'Outside your bubble', bubble.filter((b) => b.card.seenAt == null).length)}
+          {tabButton('right', 'Right', digest.filter((d) => d.seenAt == null).length)}
+          {tabButton('bubble', 'Outside', bubble.filter((b) => b.card.seenAt == null).length)}
           {tabButton('following', 'Following', stories.filter((st) => st.newCount > 0).length)}
+          {tabButton('more', 'More...', 0)}
         </ScrollView>
+      </View>
+      <View style={[styles.status, { backgroundColor: t.bg }]}>
+        <RefreshStatus />
+        {category ? (
+          <Pressable
+            testID="category-clear"
+            accessibilityRole="button"
+            accessibilityLabel={`Showing ${category}. Show all categories`}
+            hitSlop={8}
+            onPress={() => pickCategory(null)}
+            style={[styles.chip, { backgroundColor: t.accent }]}
+          >
+            <Text style={{ color: t.onAccent, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{category}</Text>
+            <Ionicons name="close" size={13} color={t.onAccent} />
+          </Pressable>
+        ) : null}
       </View>
       <BudgetBanner />
       <View style={{ flex: 1, display: tab === 'foryou' ? 'flex' : 'none' }}>
@@ -385,7 +468,13 @@ export default function FeedScreen() {
             ) : undefined
           }
           ListEmptyComponent={
-            loaded ? (
+            loaded && category && !refreshing ? (
+              <Empty
+                title={`Nothing new in ${category}`}
+                body="Every story in this category has been on screen or read."
+                action={<Button title="Show all categories" kind="secondary" onPress={() => pickCategory(null)} testID="empty-show-all" />}
+              />
+            ) : loaded ? (
               <Empty
                 title={refreshing ? 'Fetching the news…' : 'You are all caught up'}
                 body={refreshing ? 'The first refresh takes a little while.' : 'Every story here has been on screen. Pull down to check for new ones, or look in History.'}
@@ -448,7 +537,7 @@ export default function FeedScreen() {
           ListEmptyComponent={
             loaded ? (
               <Empty
-                title="Nothing outside your bubble right now"
+                title={category ? `Nothing in ${category} here right now` : 'Nothing outside your bubble right now'}
                 body="This lists stories covered by three or more outlets that would be near the top on news value alone, but that your reading history has pushed well down. It fills as the app learns what you skip."
               />
             ) : undefined
@@ -483,6 +572,42 @@ export default function FeedScreen() {
           }
         />
       </View>
+      <View style={{ flex: 1, display: tab === 'more' ? 'flex' : 'none' }}>
+        <FlatList
+          ref={moreRef}
+          testID="more-list"
+          data={more}
+          keyExtractor={(r) => String(r.article.id)}
+          renderItem={renderMore}
+          contentContainerStyle={styles.listContent}
+          refreshControl={refreshControl}
+          initialNumToRender={8}
+          windowSize={9}
+          ListHeaderComponent={
+            more.length ? (
+              <Text style={[styles.digestIntro, { color: t.muted }]}>
+                Every headline from your other sources, newest first. Nothing is ranked, filtered or hidden.
+              </Text>
+            ) : undefined
+          }
+          ListEmptyComponent={
+            loaded ? (
+              <Empty
+                title="No other headlines yet"
+                body="This lists every headline from the sources that are not primary ones, newest first, with nothing ranked or left out."
+              />
+            ) : undefined
+          }
+        />
+      </View>
+      <CategorySheet
+        visible={pickerOpen}
+        categories={categories}
+        total={allCards.length}
+        selected={category}
+        onPick={pickCategory}
+        onClose={() => setPickerOpen(false)}
+      />
       <LessBecauseSheet card={lessCard} onClose={() => setLessCard(null)} onPick={lessFor} />
       <CardMenu card={menuCard} onClose={() => setMenuCard(null)} actions={menuActions} />
     </View>
@@ -495,6 +620,8 @@ const styles = StyleSheet.create({
   tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 3 },
   tabText: { fontSize: 15, fontWeight: '700' },
   badge: { borderRadius: 9, minWidth: 18, paddingHorizontal: 5, paddingVertical: 1, alignItems: 'center' },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 18, paddingTop: 7, minHeight: 26 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 11, paddingHorizontal: 9, paddingVertical: 3, maxWidth: '60%' },
   listContent: { paddingTop: LIST_PADDING_TOP, paddingBottom: 90, flexGrow: 1 },
   digestIntro: { fontSize: 13, lineHeight: 18, paddingHorizontal: 18, paddingBottom: 12 },
 });

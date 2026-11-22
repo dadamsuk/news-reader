@@ -99,7 +99,7 @@ export default function SourcesScreen() {
     <View style={{ flex: 1, backgroundColor: t.bg }}>
       <ScrollView testID="sources-screen" contentContainerStyle={{ paddingBottom: 60 }}>
         {group('Primary: the For you feed', sources.filter((s) => s.role === 'primary'))}
-        {group('Perspective: second sources and Right press', sources.filter((s) => s.role === 'perspective'))}
+        {group('Perspective: second sources, Right and More', sources.filter((s) => s.role === 'perspective'))}
         <View style={styles.actions}>
           <Button testID="source-add" title="Add source" onPress={() => router.push({ pathname: '/settings/source/[id]', params: { id: 'new' } })} />
           <View style={styles.pair}>

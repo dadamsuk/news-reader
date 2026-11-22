@@ -50,7 +50,7 @@ export default function ReadLaterScreen() {
         )}
         contentContainerStyle={{ paddingTop: 12, paddingBottom: 90, flexGrow: 1 }}
         ListEmptyComponent={
-          rows ? <Empty title="Nothing saved" body="Swipe a card to the right, or tap its bookmark, to keep it here. Saved articles are stored for offline reading." /> : undefined
+          rows ? <Empty title="Nothing saved" body="Tap the bookmark on a card, or Save in the reader, to keep it here. Saved articles are stored for offline reading." /> : undefined
         }
       />
     </View>

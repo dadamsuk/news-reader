@@ -24,7 +24,7 @@ export async function openInBrowser(url: string, articleId?: number): Promise<vo
       const db = await getDb();
       // No scroll depth is available from the system browser: time on page is the only signal.
       const res = await recordReading(db, articleId, dwell, 0, Date.now());
-      if (res.kind) bumpData();
+      if (res.kind || res.viewed) bumpData();
     } catch {}
   };
   // On Android the promise resolves as soon as the tab opens, so the return to the app marks the end.

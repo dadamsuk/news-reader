@@ -31,8 +31,8 @@ const THRESHOLDS: Def[] = [
   { key: 'clusterThreshold', label: 'Same story (clustering)', hint: 'Similarity at which an article joins an existing story.', min: 0.3, max: 0.99 },
   { key: 'matchThreshold', label: 'Second-source candidate', hint: 'Lower finds more candidates; the model still has to confirm each one.', min: 0.3, max: 0.99 },
   { key: 'capMatchThreshold', label: 'Second source without the model', hint: 'Used only when the monthly budget is spent.', min: 0.3, max: 0.99 },
-  { key: 'digestCoveredThreshold', label: 'Right press: already covered', hint: 'A primary article this close rules a story out.', min: 0.3, max: 0.99 },
-  { key: 'digestGreyLow', label: 'Right press: ask the model above', hint: 'Between this and "already covered", the model decides.', min: 0.2, max: 0.99 },
+  { key: 'digestCoveredThreshold', label: 'Right: already covered', hint: 'A primary article this close rules a story out.', min: 0.3, max: 0.99 },
+  { key: 'digestGreyLow', label: 'Right: ask the model above', hint: 'Between this and "already covered", the model decides.', min: 0.2, max: 0.99 },
   { key: 'followThreshold', label: 'Followed story: joins above', hint: 'How close a new article must be to the story you followed. Looser than "same story", because a running story moves on.', min: 0.3, max: 0.99 },
   { key: 'embeddingDimensions', label: 'Embedding dimensions', hint: '0 keeps the model\'s own size. Changing this affects new articles only.', min: 0, max: 4096 },
 ];

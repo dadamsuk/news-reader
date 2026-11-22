@@ -71,7 +71,7 @@ On the iOS simulator the mock is `localhost:8787`: change the host in the `openL
 | --- | --- |
 | `01-setup-feed` | Keys are asked for and validated by a test call; the first refresh fills the feed; second-source strips with angle notes; Right press items with summary, outlets and count; Debug shows the run |
 | `02-seen-rule` | Half-on-screen is seen and a peek is not (checked against card geometry by the app's own audit); seen cards stay for the session; History and its search; nothing seen returns after 10 minutes in the background or pull-to-refresh |
-| `03-reader-later` | Reader shows headline, byline, text and pictures; save from the reader and by swipe, with undo; reading to the end marks a saved item done and moves it to History; swipe left with undo; long-press menu; fallback to the adapter body |
+| `03-reader-later` | Reader shows headline, byline, text and pictures; save from the reader; swipe right dismisses, with undo; reading to the end marks a saved item done and moves it to History; swipe left with undo; long-press menu; fallback to the adapter body |
 | `04-bbc-primary` | BBC News as primary with the Guardian disabled gives a BBC-only feed, with second sources and Right press still working (the spec's e2e item) |
 | `05-budget-health` | A $0.01 budget stops model calls and shows the banner while the feed still loads; a broken feed turns red, Test shows the error, other sources still refresh |
 

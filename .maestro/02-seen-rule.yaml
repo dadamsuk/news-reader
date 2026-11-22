@@ -22,7 +22,9 @@ appId: net.dsc.newsreader
     end: 50%, 52%
     duration: 1200
 - tapOn:
-    id: "settings-button"
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-data"
 - scrollUntilVisible:
     element:
       id: "settings-debug"
@@ -31,7 +33,8 @@ appId: net.dsc.newsreader
     id: "settings-debug"
 - assertVisible: "Seen rule audit: OK.*"
 - back
-- back
+- tapOn:
+    id: "tab-feed"
 
 # Within the session, scrolling back up still shows the cards already seen.
 - scrollUntilVisible:
