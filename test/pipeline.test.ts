@@ -2,8 +2,8 @@ import { ensureSession, loadDigest, loadFeed } from '../src/core/feed';
 import { loadSettings, saveSettings } from '../src/core/settings';
 import { getSource, updateSource } from '../src/core/sources';
 import { monthSpend, overBudget, extractJson } from '../src/llm/openrouter';
-import { isRefreshing, listRuns } from '../src/pipeline/refresh';
-import { orderCandidates, validateDigest, validateMatch, type Candidate } from '../src/pipeline/steps';
+import { SCORE_STEP, isRefreshing, listRuns } from '../src/pipeline/refresh';
+import { LLM_CONCURRENCY, orderCandidates, validateDigest, validateMatch, type Candidate } from '../src/pipeline/steps';
 import { countWords } from '../src/core/util';
 import { DAY } from '../src/core/types';
 import { HOUR, SRC, feedUrl, setup } from './helpers/world';
@@ -51,7 +51,7 @@ describe('refresh pipeline', () => {
     const embed = res.steps.find((x) => x.name.startsWith('3'))!;
     expect(embed.ok).toBe(false);
     expect(embed.error).toMatch(/OpenRouter key/);
-    expect(res.steps.find((x) => x.name.startsWith('7'))!.ok).toBe(true);
+    expect(res.steps.find((x) => x.name === SCORE_STEP)!.ok).toBe(true);
     // The feed still shows the articles, ordered by freshness.
     expect((await view(s)).feed).toHaveLength(1);
     // Embedding catches up once a key is present.
@@ -61,22 +61,54 @@ describe('refresh pipeline', () => {
     expect((await s.db.get<{ n: number }>('SELECT COUNT(*) n FROM article WHERE embedding IS NULL'))!.n).toBe(0);
   });
 
-  test('new articles join the feed only once matched and ranked, so a card is never seen before its second source was looked for', async () => {
+  test('a new card joins the feed once its own second-source check is done, never before', async () => {
     const s = await setup([SRC.rss('BBC News', 'centre')]);
     s.world.addGuardian([{ title: 'G: budget', topic: 1 }]);
     s.world.addFeed(feedUrl('BBC News'), [{ title: 'BBC: budget', topic: 1 }]);
     const { sessionId } = await ensureSession(s.db, s.world.now);
     const settings = await loadSettings(s.db);
-    const sizes: Record<string, Promise<number>> = {};
+    const feeds: Record<string, Promise<any[]>> = {};
     s.deps.onStep = (step) => {
-      sizes[step.name[0]] = loadFeed(s.db, settings, sessionId, s.world.now).then((f) => f.length);
+      feeds[step.name[0]] = loadFeed(s.db, settings, sessionId, s.world.now);
     };
     await s.run();
-    expect(await sizes['1']).toBe(0); // fetched, not yet offered
-    expect(await sizes['5']).toBe(0);
-    expect(await sizes['7']).toBe(1); // matched and scored: now in the feed
-    const feed = await loadFeed(s.db, settings, sessionId, s.world.now);
-    expect(feed[0].second).toMatchObject({ sourceName: 'BBC News' });
+    expect(await feeds['1']).toHaveLength(0); // fetched, not yet offered
+    expect(await feeds['4']).toHaveLength(0); // clustered, not yet checked
+    const afterCheck = await feeds['5'];
+    expect(afterCheck).toHaveLength(1); // checked: in the feed before the run ends
+    expect(afterCheck[0].second).toMatchObject({ sourceName: 'BBC News' });
+  });
+
+  test('new cards stream in batches during the run, each only after its own check', async () => {
+    const s = await setup([SRC.rss('BBC News', 'centre')]);
+    const stories = Array.from({ length: 24 }, (_, i) => ({ title: `G story ${i}`, topic: 100 + i, hoursAgo: 1 + i * 0.2 }));
+    s.world.addGuardian(stories);
+    s.world.addFeed(feedUrl('BBC News'), stories.slice(0, 12).map((g, i) => ({ title: `BBC story ${i}`, topic: g.topic })));
+    const { sessionId } = await ensureSession(s.db, s.world.now);
+    const settings = await loadSettings(s.db);
+    const batches: Promise<{ shown: number; unchecked: number }>[] = [];
+    let stepsDone = 0;
+    const doneAtBatch: number[] = [];
+    s.deps.onStep = () => { stepsDone++; };
+    s.deps.onArticlesReady = () => {
+      doneAtBatch.push(stepsDone);
+      batches.push((async () => {
+        const feed = await loadFeed(s.db, settings, sessionId, s.world.now);
+        const unchecked = await s.db.get<{ n: number }>(
+          `SELECT COUNT(*) n FROM article a JOIN source src ON src.id = a.source_id AND src.role = 'primary'
+           LEFT JOIN second_source ss ON ss.primary_article_id = a.id
+           WHERE a.ready_at IS NOT NULL AND ss.primary_article_id IS NULL`,
+        );
+        return { shown: feed.length, unchecked: unchecked!.n };
+      })());
+    };
+    await s.run();
+    const seen = await Promise.all(batches);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.every((b) => b.unchecked === 0)).toBe(true); // nothing shown before its check
+    expect(seen[0].shown).toBeLessThan(24); // the first cards arrive before the rest are checked
+    expect(doneAtBatch[0]).toBe(3); // three steps finished: during step 5, not after the run
+    expect((await loadFeed(s.db, settings, sessionId, s.world.now)).length).toBe(24);
   });
 
   test('only one refresh runs at a time', async () => {
@@ -394,8 +426,8 @@ describe('LLM cost and budget', () => {
     }
     const res = await s.run();
     expect(res.steps.every((x) => x.ok)).toBe(true);
-    // Calls already in flight finish, then no more are made.
-    expect(s.world.chatCalls.length).toBeLessThanOrEqual(5);
+    // Calls already in flight finish (up to LLM_CONCURRENCY at once), then no more are made.
+    expect(s.world.chatCalls.length).toBeLessThanOrEqual(LLM_CONCURRENCY + 1);
     expect(res.steps.find((x) => x.name.startsWith('5'))!.info).toMatch(/budget reached/);
   });
 });

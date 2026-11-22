@@ -290,7 +290,17 @@ async function logDecision(db: Db, kind: string, refId: number | null, summary: 
     [now, kind, refId, summary.slice(0, 300), JSON.stringify(detail)]);
 }
 
-export async function stepSecondSources(d: StepDeps): Promise<string> {
+/** Model calls in flight at once in the second-source and Right press steps. */
+export const LLM_CONCURRENCY = 8;
+
+export interface SecondSourceHooks {
+  /** Called once, before any check, with the primary articles about to be checked. */
+  checking?: (articleIds: number[]) => Promise<void>;
+  /** Called after each primary article's check, whatever the outcome. */
+  checked?: (articleId: number) => Promise<void>;
+}
+
+export async function stepSecondSources(d: StepDeps, hooks: SecondSourceHooks = {}): Promise<string> {
   const now = d.now();
   const s = d.settings;
   // Top 60 unseen primary articles by feed score that still need a (re)check.
@@ -328,8 +338,9 @@ export async function stepSecondSources(d: StepDeps): Promise<string> {
   let calls = 0;
   let fallback = 0;
   let budgetHit = capped;
+  await hooks.checking?.(top.map((p) => p.id));
 
-  await mapLimit(top, 4, async (p) => {
+  const checkOne = async (p: any) => {
     const pv = blobToVec(p.embedding);
     if (!pv) return;
     const checked = new Set(
@@ -414,6 +425,13 @@ export async function stepSecondSources(d: StepDeps): Promise<string> {
         return;
       }
       await logDecision(d.db, 'match', p.id, `Error: ${p.title}`, { error: errMsg(e, [d.llm.apiKey]) }, now);
+    }
+  };
+  await mapLimit(top, LLM_CONCURRENCY, async (p) => {
+    try {
+      await checkOne(p);
+    } finally {
+      await hooks.checked?.(p.id).catch(() => {});
     }
   });
   return `${top.length} checked: ${matched} matched, ${none} without a match, ${calls} LLM calls` +
@@ -536,7 +554,7 @@ export async function stepDigest(d: StepDeps): Promise<string> {
   }
 
   // Second pass: one model call per story, a few at a time.
-  await mapLimit(jobs, 4, async (job) => {
+  await mapLimit(jobs, LLM_CONCURRENCY, async (job) => {
     if (budgetHit) return;
     const c = job.cluster;
     const members = await d.db.all<any>(

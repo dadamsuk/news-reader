@@ -4,7 +4,7 @@ import { ensureSession, noteBackground } from '../core/feed';
 import { loadSettings, saveSettings, type Settings } from '../core/settings';
 import { errMsg } from '../core/util';
 import { monthSpend } from '../llm/openrouter';
-import { refresh, type RefreshDeps, type RefreshResult, type Trigger } from '../pipeline/refresh';
+import { SCORE_STEP, refresh, type RefreshDeps, type RefreshResult, type Trigger } from '../pipeline/refresh';
 import type { BodyDeps } from '../reader/body';
 import { bumpData, getState, setState } from '../state/store';
 import { getDb } from './db';
@@ -81,10 +81,21 @@ export async function appWentBackground(): Promise<void> {
   await noteBackground(db, Date.now());
 }
 
+// What runs next, shown after each step finishes.
 const STEP_LABELS = [
-  'Reading headlines', 'Grouping stories', 'Finding second sources', 'Building Right press', 'Ranking',
+  'Reading headlines', 'Grouping stories', 'Finding second sources', 'Ranking', 'Building Right press',
   'Saving articles for offline', 'Tidying up', 'Done',
 ];
+
+let bumpTimer: ReturnType<typeof setTimeout> | null = null;
+function throttledBump(): void {
+  if (bumpTimer) return;
+  bumpData();
+  bumpTimer = setTimeout(() => {
+    bumpTimer = null;
+    bumpData();
+  }, 1500);
+}
 
 /**
  * Runs a refresh. `onReady` is called once new articles are matched, ranked and in the feed (the
@@ -108,12 +119,16 @@ export async function runRefresh(
     },
     onStep: (step, index) => {
       setState({ refreshStep: STEP_LABELS[index] ?? null });
-      // New articles join the feed once they are matched and ranked (after the Score step).
-      if (step.name.startsWith('7')) {
+      // Every new article is in the feed after the Score step.
+      if (step.name === SCORE_STEP) {
         if (onReady) onReady();
         else bumpData();
       }
     },
+    // Articles stream into the feeds during the run; reload the lists at most every 1.5 seconds.
+    // Not for pull-to-refresh (onReady): that starts a new session at the end, and cards seen in
+    // the old one meanwhile would be gone from the new one.
+    onArticlesReady: onReady ? undefined : throttledBump,
   };
   try {
     return await refresh(deps, trigger);

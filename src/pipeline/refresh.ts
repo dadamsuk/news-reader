@@ -21,6 +21,8 @@ export interface RefreshDeps {
   prefetchThumbs?: (urls: string[]) => Promise<void>;
   /** Called after each step, so the UI can show the feed as soon as articles exist. */
   onStep?: (step: StepResult, index: number) => void;
+  /** Called whenever more new articles have entered the feeds (they arrive in batches during a run). */
+  onArticlesReady?: () => void;
   /** Lets a background task stop early when the system is about to end it. */
   shouldStop?: () => boolean;
 }
@@ -34,6 +36,8 @@ export interface RefreshResult {
 
 export const OPENROUTER_KEY_REF = 'openrouter_api_key';
 export const PREFETCH_COUNT = 30;
+/** The step after which every new article of the run is in the feeds. */
+export const SCORE_STEP = '6 Score';
 
 let inFlight: Promise<RefreshResult> | null = null;
 
@@ -141,20 +145,44 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   });
   await step('3 Embed', () => stepEmbed(d));
   await step('4 Cluster', () => stepCluster(d));
+  // New articles enter the feeds as soon as they can be shown properly, not all at the end:
+  // - those not due a second-source check this run straight away (they will not get one now);
+  // - each article being checked the moment its own check is done, so no card is ever seen before
+  //   its second source was looked for (seen cards never come back to show one later).
+  const markReady = async (ids: number[] | null) => {
+    const at = deps.now();
+    const r = ids == null
+      ? await db.run('UPDATE article SET ready_at = ? WHERE ready_at IS NULL', [at])
+      : ids.length
+        ? await db.run(`UPDATE article SET ready_at = ? WHERE ready_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, [at, ...ids])
+        : { changes: 0 };
+    if (r.changes > 0) {
+      try {
+        deps.onArticlesReady?.();
+      } catch {}
+    }
+  };
   await step('5 Second sources', async () => {
     await scoreArticles(db, deps.now());
-    return stepSecondSources(d);
+    return stepSecondSources(d, {
+      checking: async (ids) => {
+        const holding = new Set(ids);
+        const rows = await db.all<{ id: number }>('SELECT id FROM article WHERE ready_at IS NULL');
+        await markReady(rows.map((r) => r.id).filter((id) => !holding.has(id)));
+      },
+      checked: (id) => markReady([id]),
+    });
   });
-  await step('6 Right press', () => stepDigest(d));
-  await step('7 Score', async () => {
+  await step(SCORE_STEP, async () => {
     try {
       return `${await scoreArticles(db, deps.now())} articles scored`;
     } finally {
-      // New articles enter the feed only now, matched and ranked. Shown any earlier, a card would
-      // be seen before its second source had been looked for, and so never get one.
-      await db.run('UPDATE article SET ready_at = ? WHERE ready_at IS NULL', [deps.now()]);
+      // Anything still held (a step failed or was skipped) goes in now.
+      await markReady(null);
     }
   });
+  // Right press does not touch For you, so it runs after the new cards are already showing.
+  await step('7 Right press', () => stepDigest(d));
   await step('8 Prefetch', () => prefetch(deps, d));
   await step('9 Retention', () => stepRetention(d, deps.files ? (ids) => deps.files!.removeArticles(ids) : undefined));
 

@@ -296,6 +296,9 @@ export default function FeedScreen() {
           ref={feedRef}
           testID="feed-list"
           data={cards}
+          // Cards stream in during a refresh. Keep whatever is being read still while they land above
+          // it; at the very top (index 0 visible) new cards simply appear.
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           keyExtractor={(c) => String(c.article.id)}
           renderItem={renderCard}
           contentContainerStyle={styles.listContent}

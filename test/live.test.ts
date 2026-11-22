@@ -35,8 +35,13 @@ const live = process.env.LIVE === '1' && envKey();
     await updateSource(db, g.id, { ...g, adapter: 'rss', endpoint: 'https://www.theguardian.com/uk/rss\nhttps://www.theguardian.com/politics/rss\nhttps://www.theguardian.com/world/rss' });
   }
   const secrets = memorySecrets({ [OPENROUTER_KEY_REF]: envKey()! });
+  const t0 = Date.now();
+  let firstReady = 0;
+  let batches = 0;
   const res = await refresh({ db, fetch: nodeFetch, secrets, now: () => Date.now(), files: null, isWifi: async () => true,
-    onStep: (s) => console.log(`${s.ok ? 'ok ' : 'ERR'} ${s.name} ${s.ms}ms ${s.info ?? s.error}`) }, 'manual');
+    onArticlesReady: () => { batches++; firstReady ||= Date.now() - t0; },
+    onStep: (s) => console.log(`${s.ok ? 'ok ' : 'ERR'} ${s.name} ${s.ms}ms (at ${Date.now() - t0}ms) ${s.info ?? s.error}`) }, 'manual');
+  console.log(`first cards ready at ${firstReady}ms, ${batches} batches`);
   const settings = await loadSettings(db);
   const { sessionId } = await ensureSession(db, Date.now());
   const feed = await loadFeed(db, settings, sessionId, Date.now());
