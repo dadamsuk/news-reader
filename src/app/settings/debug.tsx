@@ -44,7 +44,7 @@ export default function DebugScreen() {
       const next = {
         runs: await listRuns(db, 20),
         clusters: await recentClusters(db),
-        decisions: await recentDecisions(db, ['match', 'digest', 'extract']),
+        decisions: await recentDecisions(db, ['match', 'digest', 'extract', 'summary']),
         stats: await counts(db),
         bg: await backgroundStatus(),
       };

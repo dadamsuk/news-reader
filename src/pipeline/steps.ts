@@ -632,6 +632,7 @@ export async function stepRetention(d: StepDeps, removeFiles?: (articleIds: numb
         DELETE FROM second_source WHERE primary_article_id IN (${chunk}) OR other_article_id IN (${chunk});
         DELETE FROM match_pair WHERE primary_article_id IN (${chunk}) OR other_article_id IN (${chunk});
         DELETE FROM story_article WHERE article_id IN (${chunk});
+        DELETE FROM article_summary WHERE article_id IN (${chunk});
       `);
     }
     await d.db.run('DELETE FROM briefing WHERE created_at < ?', [cutoff]);

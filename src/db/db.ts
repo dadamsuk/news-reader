@@ -234,6 +234,16 @@ export const MIGRATIONS: string[] = [
          NULL, 'perspective', 'centre', 'browser', 1, '[]', '[]', 30, 1
    WHERE EXISTS (SELECT 1 FROM source) AND NOT EXISTS (SELECT 1 FROM source WHERE name = 'The Wall Street Journal');
   `,
+  // 5: article summaries written on request, one per article and length.
+  `
+  CREATE TABLE article_summary (
+    article_id INTEGER NOT NULL,
+    level TEXT NOT NULL,
+    items TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (article_id, level)
+  );
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

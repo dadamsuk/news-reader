@@ -13,6 +13,7 @@ import { bodyDeps } from '../../platform/runner';
 import { ensureBody } from '../../reader/body';
 import { buildReaderHtml } from '../../reader/html';
 import { bumpData, getState, showSnack, useStore } from '../../state/store';
+import { SummarySheet } from '../../ui/SummarySheet';
 import { useTheme } from '../../ui/theme';
 
 interface Loaded {
@@ -35,6 +36,7 @@ export default function ReaderScreen() {
   const id = Number(idParam);
   const textSize = useStore((s) => s.settings.textSize);
   const [state, setState] = useState<Loaded | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const web = useRef<any>(null);
   const maxScroll = useRef(0);
   // Time on page counts only while the app is in the foreground.
@@ -155,8 +157,17 @@ export default function ReaderScreen() {
     bumpData();
   }, [id, state]);
 
-  const bar = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void, testID: string, active = false) => (
-    <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={styles.barItem} android_ripple={{ color: t.border, borderless: true }}>
+  const bar = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void, testID: string, active = false, disabled = false) => (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.barItem, disabled && { opacity: 0.35 }]}
+      android_ripple={{ color: t.border, borderless: true }}
+    >
       <Ionicons name={icon} size={22} color={active ? t.accent : t.text} />
       <Text style={[styles.barLabel, { color: active ? t.accent : t.muted }]} numberOfLines={1}>{label}</Text>
     </Pressable>
@@ -214,9 +225,12 @@ export default function ReaderScreen() {
         {state?.second
           ? bar('git-compare-outline', state.second.sourceName, () => openArticle(state.second!.articleId, 'second_source').catch(() => {}), 'reader-second')
           : null}
+        {/* Summaries are written from the stored text, so only once the reader has it. */}
+        {bar('list-outline', 'Summary', () => setSummaryOpen(true), 'reader-summary', false, !state?.pageUri)}
         {bar('share-outline', 'Share', () => state && Share.share({ message: state.url, url: state.url }).catch(() => {}), 'reader-share')}
         {bar('open-outline', 'Original', () => state && openInBrowser(state.url).catch(() => {}), 'reader-original')}
       </View>
+      <SummarySheet articleId={id} visible={summaryOpen} onClose={() => setSummaryOpen(false)} />
     </View>
   );
 }
