@@ -30,8 +30,6 @@ export interface Settings {
   weightI: number;
   coldStartDays: number;
   coldStartFactor: number;
-  /** Source names in preferred order for second sources. Empty: furthest lean first. */
-  secondSourcePreference: string[];
   /** USD per million tokens, used when a response carries no cost figure. */
   priceChatIn: number;
   priceChatOut: number;
@@ -73,7 +71,6 @@ export const DEFAULT_SETTINGS: Settings = {
   weightI: 0.5,
   coldStartDays: 14,
   coldStartFactor: 0.3,
-  secondSourcePreference: [],
   priceChatIn: 1,
   priceChatOut: 5,
   priceEmbedIn: 0.02,

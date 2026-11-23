@@ -150,16 +150,15 @@ describe('second source matching', () => {
     id: 1, sourceId: 1, sourceName: 'X', lean: 'centre', title: 't', summary: '', body: null, similarity: 0.7, ...over,
   });
 
-  test('prefers the lean furthest from the primary, ties by similarity; an explicit order overrides', () => {
+  test('prefers the lean furthest from the primary, ties by similarity', () => {
     const cands = [
       cand({ id: 1, sourceName: 'BBC News', lean: 'centre', similarity: 0.9 }),
       cand({ id: 2, sourceName: 'Daily Mail', lean: 'right', similarity: 0.72 }),
       cand({ id: 3, sourceName: 'The Telegraph', lean: 'right', similarity: 0.8 }),
       cand({ id: 4, sourceName: 'Mirror', lean: 'centre-left', similarity: 0.95 }),
     ];
-    expect(orderCandidates(cands, 'left', []).map((c) => c.id)).toEqual([3, 2, 1, 4]);
-    expect(orderCandidates(cands, 'right', []).map((c) => c.id)).toEqual([4, 1, 3, 2]);
-    expect(orderCandidates(cands, 'left', ['BBC News', 'daily mail']).map((c) => c.id)).toEqual([1, 2, 3, 4]);
+    expect(orderCandidates(cands, 'left').map((c) => c.id)).toEqual([3, 2, 1, 4]);
+    expect(orderCandidates(cands, 'right').map((c) => c.id)).toEqual([4, 1, 3, 2]);
   });
 
   test('answer validation: schema, known id and a 20-word limit', () => {

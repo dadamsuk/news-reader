@@ -11,6 +11,8 @@ export interface ReaderDoc {
   /** Remote image URL to local file URI, for offline copies. */
   imageMap: Record<string, string>;
   live?: boolean;
+  /** Outlets covering this story, for the Full coverage button at the end. Omitted: no button. */
+  coverageOutlets?: number;
 }
 
 function esc(s: string): string {
@@ -72,6 +74,15 @@ pre { white-space: pre-wrap; font-size: 0.85em; }
 .block-time { font-size: 0.72em; color: #b3261e; font-weight: 700; margin-bottom: 4px; }
 body.dark .block-time { color: #ff8a80; }
 .live-note { font-family: -apple-system, Roboto, sans-serif; font-size: 0.78em; color: #666; margin-bottom: 18px; }
+.coverage { font-family: -apple-system, Roboto, sans-serif; margin: 36px 0 28px; padding-top: 22px; border-top: 1px solid #e2e0d8; }
+body.dark .coverage { border-top-color: #333; }
+.coverage button { display: block; width: 100%; font: inherit; font-size: 0.9em; font-weight: 700; text-align: left;
+  padding: 14px 16px; border-radius: 12px; border: 1px solid #e2e0d8; background: #f4f3ef; color: #1a1a1a; }
+body.dark .coverage button { border-color: #3a3a3e; background: #1e1e22; color: #eee; }
+.coverage button .count { font-weight: 500; color: #a8201a; }
+body.dark .coverage button .count { color: #ff8a80; }
+.coverage button .sub { display: block; font-weight: 400; font-size: 0.85em; color: #666; margin-top: 3px; }
+body.dark .coverage button .sub { color: #aaa; }
 `;
 
 /** Runs inside the reader page: reports scroll depth and hands link taps to the app. */
@@ -91,6 +102,8 @@ export const READER_JS = `
   window.addEventListener('scroll', schedule, { passive: true });
   window.addEventListener('load', function () { setTimeout(measure, 400); });
   setTimeout(measure, 1200);
+  var cov = document.getElementById('coverage');
+  if (cov) cov.addEventListener('click', function () { post({ type: 'coverage' }); });
   document.addEventListener('click', function (e) {
     var el = e.target;
     while (el && el.tagName !== 'A') el = el.parentElement;
@@ -102,6 +115,14 @@ export const READER_JS = `
   };
 })();
 `;
+
+/** Full coverage at the end of every article: every outlet's piece on the story, side by side. */
+function coverageButton(outlets: number | undefined): string {
+  if (outlets == null) return '';
+  const count = outlets > 1 ? ` <span class="count">· ${outlets} outlets</span>` : '';
+  const sub = outlets > 1 ? 'Every outlet’s piece on this story, side by side' : 'Only this outlet so far. See it, or follow the story for later coverage';
+  return `<div class="coverage"><button id="coverage" type="button">Full coverage${count}<span class="sub">${sub}</span></button></div>`;
+}
 
 /** The reader page: the app's own stylesheet around sanitised article HTML. */
 export function buildReaderHtml(doc: ReaderDoc): string {
@@ -130,6 +151,7 @@ export function buildReaderHtml(doc: ReaderDoc): string {
 ${lead}
 ${doc.live ? '<p class="live-note">Live blog: latest 20 updates, newest first.</p>' : ''}
 <div id="body">${body}</div>
+${coverageButton(doc.coverageOutlets)}
 </article>
 <script>${READER_JS}</script>
 </body></html>`;

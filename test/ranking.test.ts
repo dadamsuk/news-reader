@@ -1,6 +1,6 @@
 import {
   BLOCK_SIZE, EXPLORE_SLOTS, buildFeedOrder, ensureSession, loadFeed, moreLikeThis, recordImpressions,
-  scoreIgnoredImpressions, dismiss, lessBecause, lessLikeThis, markInterested, undoDismiss, undoLess, undoLessBecause,
+  scoreIgnoredImpressions, dismiss, hideArticle, unhideArticle, lessBecause, lessLikeThis, markInterested, undoDismiss, undoLess, undoLessBecause,
   unmarkInterested, type RankItem,
 } from '../src/core/feed';
 import {
@@ -323,5 +323,35 @@ describe('card feedback', () => {
     expect(await neg('section:sport')).toBeCloseTo(0);
     expect(await neg('tag:opera')).toBeCloseTo(0);
     expect((await titles()).sort()).toEqual(['Down story', 'Swiped story']);
+  });
+
+  test('swipe right (hide) removes the card but scores only as scrolled past, never more', async () => {
+    const s = await setup([]);
+    s.world.addGuardian([
+      { title: 'Hidden story', topic: 1, section: 'Sport', hoursAgo: 1, tags: ['rugby'] },
+      { title: 'Scrolled story', topic: 2, section: 'Culture', hoursAgo: 1, tags: ['opera'] },
+    ]);
+    await s.run();
+    const id = async (t: string) => (await s.db.get<{ id: number }>('SELECT id FROM article WHERE title = ?', [t]))!.id;
+    const neg = async (k: string) => (await loadStats(s.db, s.world.now)).get(k)?.neg ?? 0;
+    const hidden = await id('Hidden story');
+    const scrolled = await id('Scrolled story');
+    const { sessionId } = await ensureSession(s.db, s.world.now);
+    const titles = async (sid: string) => (await loadFeed(s.db, await loadSettings(s.db), sid, s.world.now)).map((c) => c.article.title);
+
+    await recordImpressions(s.db, [{ articleId: scrolled, surface: 'feed' }], sessionId, s.world.now);
+    await hideArticle(s.db, hidden, sessionId, s.world.now);
+    expect(await titles(sessionId)).toEqual(['Scrolled story']); // hidden at once, even this session
+    expect(await neg('section:sport')).toBe(0); // nothing learned when hiding
+
+    await unhideArticle(s.db, hidden); // UNDO
+    expect((await titles(sessionId)).sort()).toEqual(['Hidden story', 'Scrolled story']);
+    await hideArticle(s.db, hidden, sessionId, s.world.now);
+
+    // The session ends: both count as "shown, not opened", the same -0.2 each.
+    const { sessionId: next } = await ensureSession(s.db, s.world.now + 1000, true);
+    expect(await neg('section:sport')).toBeCloseTo(0.2);
+    expect(await neg('section:culture')).toBeCloseTo(0.2);
+    expect(await titles(next)).toEqual([]);
   });
 });

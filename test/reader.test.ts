@@ -78,6 +78,15 @@ describe('reader page', () => {
     expect(html).toContain('<p>Body text.</p>');
   });
 
+  test('Full coverage at the end of the article, after the body, with the outlet count', () => {
+    const html = buildReaderHtml({ ...doc, coverageOutlets: 5 });
+    expect(html).toContain('<button id="coverage" type="button">Full coverage <span class="count">· 5 outlets</span>');
+    expect(html.indexOf('id="coverage"')).toBeGreaterThan(html.indexOf('<p>Body text.</p>'));
+    expect(html).toContain("post({ type: 'coverage' })");
+    expect(buildReaderHtml({ ...doc, coverageOutlets: 1 })).toContain('Only this outlet so far');
+    expect(buildReaderHtml(doc)).not.toContain('id="coverage"');
+  });
+
   test('no duplicate lead image when the body already opens with a picture', () => {
     const html = buildReaderHtml({ ...doc, bodyHtml: '<figure><img src="https://img.test/big.jpg" alt=""></figure><p>Body.</p>' });
     expect(html).not.toContain('class="lead"');

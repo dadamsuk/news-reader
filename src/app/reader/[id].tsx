@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { loadCoverage } from '../../core/coverage';
 import { recordReading, saveForLater, unsave } from '../../core/feed';
 import { safeJson } from '../../core/util';
 import { getDb } from '../../platform/db';
@@ -81,6 +82,7 @@ export default function ReaderScreen() {
         return;
       }
       const body = await db.get<any>('SELECT body_html, body_source, offline_images, byline FROM article WHERE id = ?', [id]);
+      const coverage = await loadCoverage(db, id).catch(() => null);
       const html = buildReaderHtml({
         title: row.title,
         byline: row.byline,
@@ -93,6 +95,7 @@ export default function ReaderScreen() {
         dark: themeRef.current.dark,
         imageMap: safeJson<Record<string, string>>(body?.offline_images, {}),
         live: body?.body_source === 'live',
+        coverageOutlets: coverage?.outletCount ?? 1,
       });
       const pageUri = writeReaderPage(id, html);
       if (!cancelled) setState({ ...base, pageUri, bodySource: body?.body_source ?? null });
@@ -134,12 +137,17 @@ export default function ReaderScreen() {
     };
   }, [id]);
 
+  const openCoverage = useCallback(() => {
+    router.push({ pathname: '/coverage/[id]', params: { id: String(id) } });
+  }, [id]);
+
   const onMessage = useCallback((e: WebViewMessageEvent) => {
     const msg = safeJson<any>(e.nativeEvent.data, null);
     if (!msg) return;
     if (msg.type === 'scroll' && typeof msg.pct === 'number') maxScroll.current = Math.max(maxScroll.current, msg.pct);
     else if (msg.type === 'link' && typeof msg.url === 'string' && /^https?:/i.test(msg.url)) openInBrowser(msg.url).catch(() => {});
-  }, []);
+    else if (msg.type === 'coverage') openCoverage();
+  }, [openCoverage]);
 
   const toggleSave = useCallback(async () => {
     if (!state) return;
@@ -212,6 +220,9 @@ export default function ReaderScreen() {
           </Text>
           <Pressable testID="reader-open-browser" onPress={() => openInBrowser(state.url, id)} style={[styles.failBtn, { backgroundColor: t.accent }]}>
             <Text style={{ color: t.onAccent, fontWeight: '700' }}>Open in browser</Text>
+          </Pressable>
+          <Pressable testID="reader-coverage" onPress={openCoverage} style={[styles.failBtn, { borderWidth: 1, borderColor: t.border }]}>
+            <Text style={{ color: t.text, fontWeight: '700' }}>Full coverage</Text>
           </Pressable>
         </View>
       ) : (

@@ -230,14 +230,6 @@ export default function SettingsScreen() {
             <Group>
               <Row testID="settings-sources" title="Sources" subtitle="Outlets, roles, leans, feeds and keys" onPress={() => router.push('/settings/sources')} />
             </Group>
-            <SettingField
-              testID="settings-preference"
-              label="Second-source preference"
-              value={s.secondSourcePreference.join(', ')}
-              onSave={(v) => save({ secondSourcePreference: v.split(',').map((x) => x.trim()).filter(Boolean) })}
-              allowEmpty
-              hint="Source names in order, separated by commas. Leave empty to prefer the lean furthest from the primary."
-            />
           </>
         ) : null}
 

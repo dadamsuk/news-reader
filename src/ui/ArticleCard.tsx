@@ -12,8 +12,10 @@ export interface CardHandlers {
   onSave: (card: FeedCard) => void;
   /** Thumbs-up: interested, but not reading or saving it. Tapping again takes it back. */
   onInterested: (card: FeedCard) => void;
-  /** Swipe right, or thumbs-down: a general "not interested". The card goes. */
+  /** Thumbs-down: a general "not interested" (-1). The card goes. */
   onDismiss: (card: FeedCard) => void;
+  /** Swipe right: hide. The card goes and nothing is learned beyond "scrolled past". */
+  onHide: (card: FeedCard) => void;
   /** Swipe left: "Show me less like this, because…" (asks for the reason). */
   onLessBecause: (card: FeedCard) => void;
   onMenu: (card: FeedCard) => void;
@@ -22,13 +24,13 @@ export interface CardHandlers {
 
 const TONE_LABEL: Record<string, string> = { comment: 'Comment', analysis: 'Analysis', live: 'Live' };
 
-function SwipeAction({ t, kind }: { t: Theme; kind: 'dismiss' | 'less' }) {
-  const dismiss = kind === 'dismiss';
+function SwipeAction({ t, kind }: { t: Theme; kind: 'hide' | 'less' }) {
+  const dismiss = kind === 'hide';
   return (
     <View style={[styles.action, { backgroundColor: t.dismiss, alignItems: dismiss ? 'flex-start' : 'flex-end' }]}>
       <View style={styles.actionInner}>
-        <Ionicons name={dismiss ? 'thumbs-down' : 'close-circle'} size={22} color="#fff" />
-        <Text style={styles.actionText}>{dismiss ? 'Dismiss' : 'Less like this…'}</Text>
+        <Ionicons name={dismiss ? 'eye-off' : 'close-circle'} size={22} color="#fff" />
+        <Text style={styles.actionText}>{dismiss ? 'Hide' : 'Less like this…'}</Text>
       </View>
     </View>
   );
@@ -39,8 +41,8 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
   const a = card.article;
   const tone = a.tone ? TONE_LABEL[a.tone] : null;
 
-  // Swipe right dismisses (the card goes); swipe left asks what to see less of.
-  const onSwipeRight = useCallback(() => handlers.onDismiss(card), [card, handlers]);
+  // Swipe right hides (the card goes, nothing learned); swipe left asks what to see less of.
+  const onSwipeRight = useCallback(() => handlers.onHide(card), [card, handlers]);
   const onSwipeLeft = useCallback(() => handlers.onLessBecause(card), [card, handlers]);
 
   return (
@@ -49,7 +51,7 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
         onSwipeRight={onSwipeRight}
         onSwipeLeft={onSwipeLeft}
         rightSlidesAway
-        renderRightSwipe={() => <SwipeAction t={t} kind="dismiss" />}
+        renderRightSwipe={() => <SwipeAction t={t} kind="hide" />}
         renderLeftSwipe={() => <SwipeAction t={t} kind="less" />}
         style={styles.swipeContainer}
       >

@@ -4,8 +4,8 @@ import { router, useNavigation } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
-  dismiss, lessBecause, lessLikeThis, loadBubble, loadDigest, loadFeed, loadMore, markInterested, moreLikeThis, saveForLater,
-  undoDismiss, undoLess, undoLessBecause, unmarkInterested, unsave, type ListRow as MoreRow,
+  dismiss, hideArticle, lessBecause, lessLikeThis, loadBubble, loadDigest, loadFeed, loadMore, markInterested, moreLikeThis, saveForLater,
+  undoDismiss, unhideArticle, undoLess, undoLessBecause, unmarkInterested, unsave, type ListRow as MoreRow,
 } from '../../core/feed';
 import { dismissBriefing, loadBriefing } from '../../core/briefing';
 import { followStory, loadStories, storyOfArticle } from '../../core/stories';
@@ -22,6 +22,7 @@ import { ArticleCard, type CardHandlers } from '../../ui/ArticleCard';
 import { BriefingCard } from '../../ui/BriefingCard';
 import { StoryCard } from '../../ui/StoryCard';
 import { DigestCard } from '../../ui/DigestCard';
+import { FetchingNews } from '../../ui/FetchingNews';
 import { ListRow } from '../../ui/ListRow';
 import { Button, Empty } from '../../ui/kit';
 import { BudgetBanner, CardMenu, CategorySheet, LessBecauseSheet, topicLabels } from '../../ui/overlays';
@@ -277,6 +278,16 @@ export default function FeedScreen() {
         reload().catch(() => {});
       });
     },
+    onHide: async (card) => {
+      const id = card.article.id;
+      const db = await getDb();
+      removeCard(id);
+      await hideArticle(db, id, getState().sessionId, Date.now());
+      showSnack('Hidden', 'UNDO', async () => {
+        await unhideArticle(db, id);
+        reload().catch(() => {});
+      });
+    },
     onMenu: (card) => setMenuCard(card),
   }), [interested, patchCard, reload, removeCard]);
   const handlers = useMemo(() => makeHandlers('feed'), [makeHandlers]);
@@ -474,11 +485,13 @@ export default function FeedScreen() {
                 body="Every story in this category has been on screen or read."
                 action={<Button title="Show all categories" kind="secondary" onPress={() => pickCategory(null)} testID="empty-show-all" />}
               />
+            ) : loaded && refreshing ? (
+              <FetchingNews />
             ) : loaded ? (
               <Empty
-                title={refreshing ? 'Fetching the news…' : 'You are all caught up'}
-                body={refreshing ? 'The first refresh takes a little while.' : 'Every story here has been on screen. Pull down to check for new ones, or look in History.'}
-                action={refreshing ? undefined : <Button title="Refresh" kind="secondary" onPress={onPull} testID="empty-refresh" />}
+                title="You are all caught up"
+                body="Every story here has been on screen. Pull down to check for new ones, or look in History."
+                action={<Button title="Refresh" kind="secondary" onPress={onPull} testID="empty-refresh" />}
               />
             ) : undefined
           }

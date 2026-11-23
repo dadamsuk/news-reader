@@ -49,12 +49,15 @@ export async function noteBackground(db: Db, now: number): Promise<void> {
   await saveSettings(db, { lastBackgroundAt: now, lastActiveAt: now });
 }
 
-/** "Shown, not opened": cards from finished sessions that drew no reaction count as a weak negative. */
+/**
+ * "Shown, not opened": cards from finished sessions that drew no reaction count as a weak negative.
+ * A card swiped away (hidden) drew no reaction either: it counts the same as one scrolled past.
+ */
 export async function scoreIgnoredImpressions(db: Db, currentSessionId: string, now: number): Promise<number> {
   const rows = await db.all<{ article_id: number }>(
     `SELECT i.article_id FROM impression i
      WHERE i.scored = 0 AND i.session_id != ? AND i.surface = 'feed'
-       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = i.article_id)`,
+       AND NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = i.article_id AND x.kind != 'hidden')`,
     [currentSessionId],
   );
   for (const r of rows) {
@@ -201,7 +204,7 @@ const FEED_SELECT = `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at
             EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested,
             EXISTS (SELECT 1 FROM story_article sa WHERE sa.article_id = a.id) following`;
 /** An article open for five seconds or more has been read as far as the feeds are concerned. */
-const FEED_HIDING: InteractionKind[] = [...HIDING_KINDS, 'viewed'];
+const FEED_HIDING: InteractionKind[] = [...HIDING_KINDS, 'viewed', 'hidden'];
 const NOT_HIDDEN = `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${FEED_HIDING.map((k) => `'${k}'`).join(',')}))`;
 const likeTerm = (t: string) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 const LIKE_ANY = "(a.title LIKE ? ESCAPE '\\' OR a.summary LIKE ? ESCAPE '\\' OR a.tags LIKE ? ESCAPE '\\' OR a.section LIKE ? ESCAPE '\\')";
@@ -597,6 +600,21 @@ export async function undoDone(db: Db, articleId: number): Promise<void> {
   await db.run('UPDATE read_later SET done_at = NULL WHERE article_id = ?', [articleId]);
 }
 
+/**
+ * Hide (swipe right): the card goes, and that is all. It teaches nothing now; when its session
+ * ends it counts as scrolled past (-0.2), the same as any card seen and left alone.
+ */
+export async function hideArticle(db: Db, articleId: number, sessionId: string, now: number): Promise<void> {
+  await recordImpressions(db, [{ articleId, surface: 'feed' }], sessionId, now);
+  if (await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'hidden'", [articleId])) return;
+  await logInteraction(db, articleId, 'hidden', now);
+}
+
+export async function unhideArticle(db: Db, articleId: number): Promise<void> {
+  await db.run("DELETE FROM interaction WHERE article_id = ? AND kind = 'hidden'", [articleId]);
+}
+
+/** Not interested (thumbs-down): -1 on everything about the article. The card goes. */
 export async function dismiss(db: Db, articleId: number, sessionId: string, now: number): Promise<void> {
   await recordImpressions(db, [{ articleId, surface: 'feed' }], sessionId, now);
   await logInteraction(db, articleId, 'dismiss', now);

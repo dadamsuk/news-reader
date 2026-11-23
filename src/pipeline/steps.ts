@@ -215,20 +215,10 @@ export interface Candidate {
   similarity: number;
 }
 
-/** Candidate order: explicit preference list if set, else the lean furthest from the primary; ties by similarity. */
-export function orderCandidates(cands: Candidate[], primaryLean: Lean, preference: string[]): Candidate[] {
-  const prefIndex = (name: string) => {
-    const i = preference.findIndex((p) => p.toLowerCase().trim() === name.toLowerCase().trim());
-    return i < 0 ? preference.length : i;
-  };
+/** Candidate order: the lean furthest from the primary first; ties by similarity. */
+export function orderCandidates(cands: Candidate[], primaryLean: Lean): Candidate[] {
   const dist = (c: Candidate) => Math.abs(LEAN_ORDER[c.lean] - LEAN_ORDER[primaryLean]);
-  return cands.slice().sort((a, b) => {
-    if (preference.length) {
-      const p = prefIndex(a.sourceName) - prefIndex(b.sourceName);
-      if (p !== 0) return p;
-    }
-    return dist(b) - dist(a) || b.similarity - a.similarity;
-  });
+  return cands.slice().sort((a, b) => dist(b) - dist(a) || b.similarity - a.similarity);
 }
 
 export interface MatchAnswer {
@@ -377,7 +367,7 @@ export async function stepSecondSources(d: StepDeps, hooks: SecondSourceHooks = 
       none++;
       return;
     }
-    const ordered = orderCandidates(fresh, p.lean, s.secondSourcePreference);
+    const ordered = orderCandidates(fresh, p.lean);
     const ids = ordered.map((_, i) => `c${i + 1}`);
     try {
       calls++;

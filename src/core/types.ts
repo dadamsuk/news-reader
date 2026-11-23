@@ -9,7 +9,9 @@ export type InteractionKind =
   | 'open' | 'read' | 'save' | 'unsave' | 'dismiss' | 'more' | 'less' | 'bounce' | 'ignored'
   | 'interested' | 'less_source' | 'less_section' | 'less_topic'
   /** Open for five seconds or more: the card leaves the feeds (History still lists it). Teaches nothing by itself. */
-  | 'viewed';
+  | 'viewed'
+  /** Swiped away: the card leaves the feeds and counts exactly as if it had been scrolled past. */
+  | 'hidden';
 
 /** Why a swipe asked for less: one part of the article, not all of it. */
 export type LessReason = 'source' | 'section' | 'topic';
