@@ -72,3 +72,22 @@ describe('migrations', () => {
     expect(names).toEqual(expect.arrayContaining(['Guardian', 'The New York Times', 'The Wall Street Journal', 'BBC News']));
   });
 });
+
+describe('migration 6', () => {
+  const OLD = 'https://www.dailymail.co.uk/news/index.rss\nhttps://www.dailymail.co.uk/news/uk-politics/index.rss';
+  const NEW = DEFAULT_SOURCES.find((x) => x.name === 'Daily Mail')!.endpoint;
+  test('moves the default Daily Mail feeds to dailymail.com; an edited address is left alone', async () => {
+    for (const [before, after] of [[OLD, NEW], ['https://www.dailymail.co.uk/sport/index.rss', 'https://www.dailymail.co.uk/sport/index.rss']]) {
+      const db = openNodeDb();
+      for (let i = 0; i < 5; i++) await db.exec(MIGRATIONS[i]);
+      await db.exec('PRAGMA user_version = 5');
+      await db.run(
+        `INSERT INTO source(name, adapter, endpoint, role, lean, reader_mode, paywalled, include_sections, exclude_sections, refresh_minutes, enabled)
+         VALUES('Daily Mail', 'rss', ?, 'perspective', 'right', 'extract', 0, '[]', '[]', 30, 1)`, [before],
+      );
+      await migrate(db);
+      expect((await db.get<{ endpoint: string }>('SELECT endpoint FROM source'))!.endpoint).toBe(after);
+    }
+    expect(NEW).toBe('https://www.dailymail.com/news/index.rss\nhttps://www.dailymail.com/news/uk-politics/index.rss');
+  });
+});

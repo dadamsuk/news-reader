@@ -53,17 +53,17 @@ appId: net.dsc.newsreader
     id: "feed-list"
 - assertVisible: ".*(Leads on the gambling duty rise|Frames the duty rise as a blow to punters).*"
 
-# Right press: stories from two or more right-leaning outlets that the Guardian has not run.
+# Not for you (Right press): stories from two or more right-leaning outlets that the Guardian has not run.
 - tapOn:
     id: "feedtab-right"
-- assertVisible: "3 OUTLETS"
+- assertVisible: ".* · 3 outlets"
 - assertVisible: "Protesters are reported to have gathered.*"
-- assertVisible: "GB News"
-- assertVisible: "Daily Express"
+- assertVisible: ".*GB News.*"
+- assertVisible: ".*Daily Express.*"
 - scrollUntilVisible:
     element: "A council is reported to have ordered.*"
     direction: DOWN
-- assertVisible: "2 OUTLETS"
+- assertVisible: ".* · 2 outlets"
 - assertNotVisible: ".*BBC presenter in new bias row.*"
 
 # Debug lists the run with its steps.

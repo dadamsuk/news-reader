@@ -117,6 +117,7 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   const runId = ins.lastInsertRowId;
   const steps: StepResult[] = [];
   let newArticles = 0;
+  let sourcesFetched = 0;
 
   // A failed step is logged and skipped. It never blocks the steps after it.
   const step = async (name: string, fn: () => Promise<string>) => {
@@ -142,6 +143,7 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   await step('1-2 Fetch and de-duplicate', async () => {
     const r = await stepFetch(d, trigger === 'manual' || trigger === 'setup' || trigger === 'test');
     newArticles = r.added;
+    sourcesFetched = r.fetched;
     return r.info;
   });
   await step('3 Embed', () => stepEmbed(d));
@@ -163,7 +165,14 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
       } catch {}
     }
   };
+  // An automatic refresh (on opening, or in the background) with no source due yet has nothing new
+  // to work on: running the model steps again would only repeat the last refresh's work and cost.
+  // Anything left over is picked up by the next refresh that fetches. Pull-to-refresh, setup and a
+  // refresh after a settings change always run every step.
+  const idle = sourcesFetched === 0 && (trigger === 'open' || trigger === 'background');
+  const NOTHING_NEW = 'skipped: no source due yet';
   await step('5 Second sources', async () => {
+    if (idle) return NOTHING_NEW;
     await scoreArticles(db, deps.now());
     return stepSecondSources(d, {
       checking: async (ids) => {
@@ -183,8 +192,8 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
     }
   });
   // Right press does not touch For you, so it runs after the new cards are already showing.
-  await step('7 Right press', () => stepDigest(d));
-  await step('7b Followed stories', () => stepStories(d));
+  await step('7 Right press', async () => (idle ? NOTHING_NEW : stepDigest(d)));
+  await step('7b Followed stories', async () => (idle ? NOTHING_NEW : stepStories(d)));
   await step('7c Briefing', async () => {
     const info = await stepBriefing(d);
     if (info !== 'not due') {

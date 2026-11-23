@@ -115,6 +115,7 @@ export async function runRefresh(
 ): Promise<RefreshResult | null> {
   const db = await getDb();
   if (trigger !== 'background') setState({ refreshing: true, refreshStep: 'Fetching sources' });
+  let cardsIn = false;
   const deps: RefreshDeps = {
     db,
     fetch: appFetch,
@@ -127,11 +128,16 @@ export async function runRefresh(
       if (urls.length) await Image.prefetch(urls, 'disk');
     },
     onStep: (step, index) => {
+      if (cardsIn) return;
       setState({ refreshStep: STEP_LABELS[index] ?? null });
       // Every new article is in the feed after the Score step.
       if (step.name === SCORE_STEP) {
+        cardsIn = true;
         if (onReady) onReady();
         else bumpData();
+        // Right press, followed stories and the offline copies carry on quietly: the header stops
+        // saying "Refreshing" now, not when they finish.
+        setState({ refreshing: false, refreshStep: null });
       }
     },
     // Articles stream into the feeds during the run; reload the lists at most every 1.5 seconds.

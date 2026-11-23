@@ -1,4 +1,4 @@
-import { ensureSession, loadDigest, loadFeed } from '../src/core/feed';
+import { ensureSession, hideArticle, loadDigest, loadFeed, saveForLater } from '../src/core/feed';
 import { loadSettings, saveSettings } from '../src/core/settings';
 import { getSource, updateSource } from '../src/core/sources';
 import { monthSpend, overBudget, extractJson } from '../src/llm/openrouter';
@@ -109,6 +109,30 @@ describe('refresh pipeline', () => {
     expect(seen[0].shown).toBeLessThan(24); // the first cards arrive before the rest are checked
     expect(doneAtBatch[0]).toBe(3); // three steps finished: during step 5, not after the run
     expect((await loadFeed(s.db, settings, sessionId, s.world.now)).length).toBe(24);
+  });
+
+  test('an automatic refresh with no source due skips the model steps; pull-to-refresh never does', async () => {
+    const s = await setup([SRC.rss('BBC News', 'centre')]);
+    s.world.addGuardian([{ title: 'G: budget', topic: 1 }]);
+    s.world.addFeed(feedUrl('BBC News'), [{ title: 'BBC: budget', topic: 1 }]);
+    const first = await s.run('open');
+    expect(first.steps[0].info).toMatch(/2 of 2 sources fetched, 2 new; slowest: /);
+    // A model step that failed last time would be retried; make sure one is pending.
+    await s.db.run('DELETE FROM second_source');
+    await s.db.run('DELETE FROM match_pair');
+    s.world.chatCalls.length = 0;
+
+    s.world.now += 60_000; // reopened a minute later: no source is due
+    const idle = await s.run('open');
+    expect(idle.steps[0].info).toMatch(/^0 of 2 sources fetched/);
+    for (const name of ['5 Second sources', '7 Right press', '7b Followed stories']) {
+      expect(idle.steps.find((x) => x.name === name)!.info).toBe('skipped: no source due yet');
+    }
+    expect(s.world.chatCalls).toHaveLength(0);
+
+    const pulled = await s.run('manual');
+    expect(pulled.steps.find((x) => x.name === '5 Second sources')!.info).not.toMatch(/skipped/);
+    expect(s.world.chatCalls.length).toBeGreaterThan(0);
   });
 
   test('only one refresh runs at a time', async () => {
@@ -267,6 +291,26 @@ describe('Right press digest', () => {
     s.world.addFeed(feedUrl('Daily Express'), [{ title: 'Express: migrant hotel protest', topic: 5, hoursAgo: 1 }, { title: 'Express: budget', topic: 1 }]);
     return s;
   }
+
+  test('each story comes as a feed card: newest outlet, neutral summary as standfirst; hiding it removes the story', async () => {
+    const s = await digestWorld();
+    await s.run();
+    let { digest, sessionId } = await view(s);
+    const card = digest[0].card;
+    expect(card.article.title).toBe('Express: migrant hotel protest'); // the newest of the three
+    expect(card.sourceName).toBe('Daily Express');
+    expect(card.article.summary).toBe('Several outlets report a story the primary source has not run.');
+    expect(card.outletCount).toBe(3);
+    expect(card.goodFit).toBe(false);
+    // Card state comes from the lead article, as in For you.
+    await saveForLater(s.db, card.article.id, sessionId, s.world.now);
+    ({ digest } = await view(s));
+    expect(digest[0].card.saved).toBe(true);
+    // Swiping it away (hide) takes the whole story off the tab.
+    await hideArticle(s.db, card.article.id, sessionId, s.world.now);
+    ({ digest } = await view(s));
+    expect(digest).toHaveLength(0);
+  });
 
   test('shows only stories from 2+ right-leaning outlets with no primary coverage, with summary, links and count', async () => {
     const s = await digestWorld();

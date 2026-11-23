@@ -64,5 +64,5 @@ appId: net.dsc.newsreader
 # Right press still works.
 - tapOn:
     id: "feedtab-right"
-- assertVisible: "3 OUTLETS"
+- assertVisible: ".* · 3 outlets"
 - assertVisible: "Protesters are reported to have gathered.*"

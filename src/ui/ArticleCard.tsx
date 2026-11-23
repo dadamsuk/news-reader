@@ -36,7 +36,16 @@ function SwipeAction({ t, kind }: { t: Theme; kind: 'hide' | 'less' }) {
   );
 }
 
-function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: number; handlers: CardHandlers; note?: string }) {
+function ArticleCardBase({ card, now, handlers, note, onNote, showFit = true, noteIcon = 'eye-off-outline' }: {
+  card: FeedCard; now: number; handlers: CardHandlers;
+  /** A strip under the card (e.g. which outlets carry the story). */
+  note?: string;
+  /** Makes the note strip a button (e.g. to Full coverage). */
+  onNote?: () => void;
+  /** The good-fit dot; off where cards are not ranked by fit. */
+  showFit?: boolean;
+  noteIcon?: keyof typeof Ionicons.glyphMap;
+}) {
   const t = useTheme();
   const a = card.article;
   const tone = a.tone ? TONE_LABEL[a.tone] : null;
@@ -67,15 +76,17 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
             style={styles.main}
           >
             <View style={styles.metaRow}>
-              <View
-                testID={`fit-${a.id}`}
-                accessible
-                accessibilityLabel={card.goodFit ? 'A good fit for you' : 'Shown because it is recent'}
-                style={[
-                  styles.fitDot,
-                  card.goodFit ? { backgroundColor: t.accent, borderColor: t.accent } : { borderColor: t.faint },
-                ]}
-              />
+              {showFit ? (
+                <View
+                  testID={`fit-${a.id}`}
+                  accessible
+                  accessibilityLabel={card.goodFit ? 'A good fit for you' : 'Shown because it is recent'}
+                  style={[
+                    styles.fitDot,
+                    card.goodFit ? { backgroundColor: t.accent, borderColor: t.accent } : { borderColor: t.faint },
+                  ]}
+                />
+              ) : null}
               <Text style={[styles.meta, { color: t.accent }]} numberOfLines={1}>
                 {(a.section ?? card.sourceName).toUpperCase()}
               </Text>
@@ -168,10 +179,18 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
             </View>
           ) : null}
           {note ? (
-            <View testID={`note-${a.id}`} style={[styles.strip, { backgroundColor: t.strip, borderTopColor: t.border }]}>
-              <Ionicons name="eye-off-outline" size={15} color={t.muted} style={{ marginTop: 2 }} />
+            <Pressable
+              testID={`note-${a.id}`}
+              disabled={!onNote}
+              accessibilityRole={onNote ? 'button' : undefined}
+              onPress={onNote}
+              android_ripple={onNote ? { color: t.border } : undefined}
+              style={[styles.strip, { backgroundColor: t.strip, borderTopColor: t.border }]}
+            >
+              <Ionicons name={noteIcon} size={15} color={t.muted} style={{ marginTop: 2 }} />
               <Text style={[styles.stripText, { color: t.muted }]}>{note}</Text>
-            </View>
+              {onNote ? <Ionicons name="chevron-forward" size={15} color={t.faint} style={{ marginTop: 2 }} /> : null}
+            </Pressable>
           ) : null}
         </View>
       </SwipeRow>
@@ -182,7 +201,7 @@ function ArticleCardBase({ card, now, handlers, note }: { card: FeedCard; now: n
 export const ArticleCard = memo(
   ArticleCardBase,
   (p, n) =>
-    p.card === n.card && p.handlers === n.handlers && p.note === n.note && ageLabel(p.card.article.publishedAt, p.now) === ageLabel(n.card.article.publishedAt, n.now),
+    p.card === n.card && p.handlers === n.handlers && p.note === n.note && p.onNote === n.onNote && ageLabel(p.card.article.publishedAt, p.now) === ageLabel(n.card.article.publishedAt, n.now),
 );
 
 const styles = StyleSheet.create({

@@ -67,7 +67,8 @@ export const DEFAULT_SOURCES: SourceInput[] = [
   },
   {
     name: 'Daily Mail', adapter: 'rss',
-    endpoint: 'https://www.dailymail.co.uk/news/index.rss\nhttps://www.dailymail.co.uk/news/uk-politics/index.rss',
+    // dailymail.co.uk redirects to dailymail.com: asking .com directly saves a round trip per feed.
+    endpoint: 'https://www.dailymail.com/news/index.rss\nhttps://www.dailymail.com/news/uk-politics/index.rss',
     apiKeyRef: null, role: 'perspective', lean: 'right', readerMode: 'extract', paywalled: false,
     includeSections: [], excludeSections: NON_NEWS, refreshMinutes: 30, enabled: true,
   },

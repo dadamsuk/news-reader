@@ -191,14 +191,18 @@ async function fetchRss(source: AdapterSource, ctx: AdapterCtx): Promise<RawItem
   const out: RawItem[] = [];
   let firstError: unknown = null;
   let okCount = 0;
-  for (const url of urls) {
-    try {
-      out.push(...parseFeed(await getText(ctx, url)));
+  // A source's feeds are fetched at the same time (on a phone each is mostly network wait);
+  // their items are still taken in the order the feeds are listed.
+  const results = await Promise.allSettled(urls.map(async (url) => parseFeed(await getText(ctx, url))));
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      out.push(...r.value);
       okCount++;
-    } catch (e) {
-      firstError = firstError ?? new Error(`${url}: ${e instanceof Error ? e.message : String(e)}`);
+    } else {
+      const e = r.reason;
+      firstError = firstError ?? new Error(`${urls[i]}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  });
   // Any failing feed marks the source red, but the items that did arrive are still used.
   if (firstError && okCount === 0) throw firstError;
   if (firstError) (out as any).partialError = firstError;

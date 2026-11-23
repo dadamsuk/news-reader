@@ -350,7 +350,8 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
   const rows = await db.all<any>(
     `SELECT a.id, a.cluster_id, a.source_id, a.title, a.summary, a.section, a.tags, a.image_url, a.published_at, a.score_a, a.score_s,
             s.name source_name, s.lean, s.paywalled, c.digest_summary, c.digest_at,
-            i.first_seen_at seen_at, i.session_id seen_session
+            i.first_seen_at seen_at, i.session_id seen_session,
+            NOT ${NOT_HIDDEN} hidden
      FROM cluster c
      JOIN article a ON a.cluster_id = c.id
      JOIN source s ON s.id = a.source_id AND s.enabled = 1 AND s.role = 'perspective'
@@ -375,6 +376,8 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
     if (members.some((m) => m.seen_session && m.seen_session !== sessionId)) continue;
     // A muted term in any outlet's piece mutes the story.
     if (topics.rules.length && members.some(mutedPiece)) continue;
+    // Hidden, marked down or read in any outlet's piece: the story is done, as in For you.
+    if (members.some((m) => m.hidden)) continue;
     const seenTimes = members.filter((m) => m.seen_at != null).map((m) => m.seen_at as number);
     const perSource = new Map<number, any>();
     for (const m of members) if (!perSource.has(m.source_id)) perSource.set(m.source_id, m);
@@ -388,6 +391,7 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
     const summary = members[0].digest_summary as string | null;
     items.push({
       clusterId,
+      card: null as unknown as FeedCard, // filled in below
       summary: summary || outlets[0].title,
       hasSummary: !!summary,
       imageUrl: free?.image_url ?? null,
@@ -400,6 +404,45 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
       seenAt: seenTimes.length ? Math.min(...seenTimes) : null,
     });
   }
+  // Each story as a feed card, so the tab looks and works like For you: the newest outlet's piece,
+  // with the neutral summary as its standfirst.
+  const leadIds = items.map((it) => it.outlets[0].articleId);
+  const leads = new Map<number, any>();
+  for (let i = 0; i < leadIds.length; i += 400) {
+    const chunk = leadIds.slice(i, i + 400);
+    const rows = await db.all<any>(
+      `${FEED_SELECT}
+       FROM article a JOIN source s ON s.id = a.source_id
+       LEFT JOIN cluster c ON c.id = a.cluster_id
+       LEFT JOIN impression i ON i.article_id = a.id
+       LEFT JOIN read_later rl ON rl.article_id = a.id
+       WHERE a.id IN (${placeholders(chunk.length)})`,
+      chunk,
+    );
+    for (const r of rows) leads.set(r.id, r);
+  }
+  for (const it of items) {
+    const r = leads.get(it.outlets[0].articleId);
+    if (!r) continue;
+    const article = rowToArticle(r);
+    it.card = {
+      article: { ...article, summary: it.hasSummary ? it.summary : article.summary, imageUrl: article.imageUrl ?? it.imageUrl },
+      sourceName: r.source_name,
+      score: it.score,
+      explore: false,
+      seenAt: it.seenAt,
+      saved: !!r.saved,
+      interested: !!r.interested,
+      goodFit: false,
+      second: null,
+      outletCount: it.outletCount,
+      watch: null,
+      following: !!r.following,
+    };
+  }
+  const withCards = items.filter((it) => it.card);
+  items.length = 0;
+  items.push(...withCards);
   // Seen-this-session items keep their place; the rest: outlets, then recency, then learned interest.
   const rank = (a: DigestItem, b: DigestItem) =>
     b.outletCount - a.outletCount ||

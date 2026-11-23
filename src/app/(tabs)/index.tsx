@@ -10,7 +10,7 @@ import {
 import { dismissBriefing, loadBriefing } from '../../core/briefing';
 import { followStory, loadStories, storyOfArticle } from '../../core/stories';
 import type {
-  Briefing, BriefingItem, BubbleItem, DigestItem, DigestOutlet, FeedCard, LessReason, StoryView, Surface,
+  Briefing, BriefingItem, BubbleItem, DigestItem, FeedCard, LessReason, StoryView, Surface,
 } from '../../core/types';
 import { ageLabel, errMsg } from '../../core/util';
 import { getDb } from '../../platform/db';
@@ -21,7 +21,6 @@ import { APP_START, getState, setState, showSnack, useStore } from '../../state/
 import { ArticleCard, type CardHandlers } from '../../ui/ArticleCard';
 import { BriefingCard } from '../../ui/BriefingCard';
 import { StoryCard } from '../../ui/StoryCard';
-import { DigestCard } from '../../ui/DigestCard';
 import { FetchingNews } from '../../ui/FetchingNews';
 import { ListRow } from '../../ui/ListRow';
 import { Button, Empty } from '../../ui/kit';
@@ -193,10 +192,12 @@ export default function FeedScreen() {
   const patchCard = useCallback((id: number, patch: Partial<FeedCard>) => {
     setCards((prev) => prev.map((c) => (c.article.id === id ? { ...c, ...patch } : c)));
     setBubble((prev) => prev.map((b) => (b.card.article.id === id ? { ...b, card: { ...b.card, ...patch } } : b)));
+    setDigest((prev) => prev.map((d) => (d.card.article.id === id ? { ...d, card: { ...d.card, ...patch } } : d)));
   }, []);
   const removeCard = useCallback((id: number) => {
     setCards((prev) => prev.filter((c) => c.article.id !== id));
     setBubble((prev) => prev.filter((b) => b.card.article.id !== id));
+    setDigest((prev) => prev.filter((d) => d.card.article.id !== id));
   }, []);
 
   const interested = useCallback(async (card: FeedCard) => {
@@ -292,6 +293,7 @@ export default function FeedScreen() {
   }), [interested, patchCard, reload, removeCard]);
   const handlers = useMemo(() => makeHandlers('feed'), [makeHandlers]);
   const bubbleHandlers = useMemo(() => makeHandlers('bubble'), [makeHandlers]);
+  const digestHandlers = useMemo(() => makeHandlers('digest'), [makeHandlers]);
 
   const menuActions = useMemo(() => ({
     onMore: async (card: FeedCard) => {
@@ -340,9 +342,6 @@ export default function FeedScreen() {
     await dismissBriefing(await getDb(), b.id, Date.now());
   }, []);
 
-  const onOpenOutlet = useCallback((o: DigestOutlet) => {
-    openArticle(o.articleId, 'digest').catch(() => showSnack('Could not open the article'));
-  }, []);
   const onOpenMore = useCallback((row: MoreRow) => {
     openArticle(row.article.id, 'coverage').catch(() => showSnack('Could not open the article'));
   }, []);
@@ -392,8 +391,19 @@ export default function FeedScreen() {
     [now, onOpenMore],
   );
   const renderDigest = useCallback(
-    ({ item }: { item: DigestItem }) => <DigestCard item={item} now={now} onOpenOutlet={onOpenOutlet} onCoverage={onDigestCoverage} />,
-    [now, onOpenOutlet, onDigestCoverage],
+    // The same card as For you; the strip lists the outlets carrying the story and opens Full coverage.
+    ({ item }: { item: DigestItem }) => (
+      <ArticleCard
+        card={item.card}
+        now={now}
+        handlers={digestHandlers}
+        showFit={false}
+        note={`${item.outlets.map((o) => o.sourceName).join(', ')} · ${item.outletCount} outlets`}
+        noteIcon="albums-outline"
+        onNote={() => onDigestCoverage(item)}
+      />
+    ),
+    [now, digestHandlers, onDigestCoverage],
   );
 
   const refreshControl = (
@@ -424,7 +434,7 @@ export default function FeedScreen() {
       <View style={[styles.tabs, { backgroundColor: t.card, borderBottomColor: t.border }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsInner}>
           {tabButton('foryou', 'For you', cards.length)}
-          {tabButton('right', 'Right', digest.filter((d) => d.seenAt == null).length)}
+          {tabButton('right', 'Not for you', digest.filter((d) => d.seenAt == null).length)}
           {tabButton('bubble', 'Outside', bubble.filter((b) => b.card.seenAt == null).length)}
           {tabButton('following', 'Following', stories.filter((st) => st.newCount > 0).length)}
           {tabButton('more', 'More...', 0)}

@@ -176,6 +176,8 @@ export interface DigestOutlet {
 
 export interface DigestItem {
   clusterId: number;
+  /** The story as a feed card: the newest outlet's piece, with the neutral summary as its standfirst. */
+  card: FeedCard;
   summary: string;
   hasSummary: boolean;
   imageUrl: string | null;

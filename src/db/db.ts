@@ -244,6 +244,12 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (article_id, level)
   );
   `,
+  // 6: the Daily Mail's feeds moved to dailymail.com (the .co.uk addresses redirect, an extra round
+  // trip each). Only the original default address is changed.
+  `
+  UPDATE source SET endpoint = 'https://www.dailymail.com/news/index.rss' || char(10) || 'https://www.dailymail.com/news/uk-politics/index.rss'
+   WHERE endpoint = 'https://www.dailymail.co.uk/news/index.rss' || char(10) || 'https://www.dailymail.co.uk/news/uk-politics/index.rss';
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

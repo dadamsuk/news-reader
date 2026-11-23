@@ -51,7 +51,10 @@ export async function insertItems(db: Db, source: Pick<Source, 'id'>, items: Raw
   return added;
 }
 
-export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: string; added: number; failed: string[] }> {
+/** Sources fetched at once. */
+export const FETCH_CONCURRENCY = 16;
+
+export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: string; added: number; failed: string[]; fetched: number }> {
   const now = d.now();
   const sources = (await listSources(d.db)).filter((s) => s.enabled);
   // A pull-to-refresh fetches every source again, but not more than once every ten seconds.
@@ -63,13 +66,46 @@ export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: st
   });
   let added = 0;
   const failed: string[] = [];
-  await mapLimit(due, 4, async (s) => {
+  const took: { name: string; ms: number; net: number; read: number; store: number; items: number }[] = [];
+  // All due sources at once: on a phone each feed is mostly waiting on the network, and fetching
+  // them a few at a time made the whole step several times slower than any one source.
+  await mapLimit(due, FETCH_CONCURRENCY, async (s) => {
     let key: string | null = null;
+    const t0 = Date.now();
+    // Where each source's time goes (download, reading the feed, saving), for Settings, Debug.
+    const time = { net: 0, read: 0, store: 0, items: 0 };
+    // Download time is the span from the first request starting to the last body arriving: a
+    // source's feeds download at the same time, so adding them up would overstate it.
+    let netStart = 0;
+    let netEnd = 0;
+    const span = (a: number) => {
+      netStart = netStart ? Math.min(netStart, a) : a;
+      netEnd = Math.max(netEnd, Date.now());
+      time.net = netEnd - netStart;
+    };
+    const timedFetch: FetchFn = async (url, init) => {
+      const a = Date.now();
+      const res = await d.fetch(url, init);
+      span(a);
+      const body = <T>(f: () => Promise<T>) => async () => {
+        try {
+          return await f();
+        } finally {
+          span(a);
+        }
+      };
+      return { ok: res.ok, status: res.status, text: body(() => res.text()), json: body(() => res.json()) };
+    };
     try {
       key = s.apiKeyRef ? await d.secrets.get(s.apiKeyRef) : null;
       const since = Math.max(now - CLUSTER_WINDOW, s.lastOkAt ? s.lastOkAt - OVERLAP : now - FIRST_LOOKBACK);
-      const { items, partialError } = await fetchSource(s, { fetch: d.fetch, apiKey: key, since, now });
+      const t1 = Date.now();
+      const { items, partialError } = await fetchSource(s, { fetch: timedFetch, apiKey: key, since, now });
+      time.read = Math.max(0, Date.now() - t1 - time.net);
+      time.items = items.length;
+      const t2 = Date.now();
       const n = await insertItems(d.db, s, items, now);
+      time.store = Date.now() - t2;
       added += n;
       if (partialError) failed.push(s.name);
       await d.db.run(
@@ -79,12 +115,20 @@ export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: st
     } catch (e) {
       failed.push(s.name);
       await d.db.run('UPDATE source SET last_fetch_at = ?, last_error = ? WHERE id = ?', [now, errMsg(e, [key]), s.id]);
+    } finally {
+      took.push({ name: s.name, ms: Date.now() - t0, ...time });
     }
   });
+  // The slowest sources, for Settings, Debug.
+  const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const slowest = took.sort((a, b) => b.ms - a.ms).slice(0, 3)
+    .map((x) => `${x.name} ${sec(x.ms)} (download ${sec(x.net)}, read ${sec(x.read)}, save ${x.items} in ${sec(x.store)})`).join(', ');
   return {
-    info: `${due.length} of ${sources.length} sources fetched, ${added} new${failed.length ? `, failed: ${failed.join(', ')}` : ''}`,
+    info: `${due.length} of ${sources.length} sources fetched, ${added} new${failed.length ? `, failed: ${failed.join(', ')}` : ''}` +
+      (slowest ? `; slowest: ${slowest}` : ''),
     added,
     failed,
+    fetched: due.length,
   };
 }
 
