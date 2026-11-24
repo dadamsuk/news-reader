@@ -1,0 +1,93 @@
+# Switching modes: the mode bar above the feed tabs with unseen counts; each mode's own feed,
+# History and Settings (Sources and Learning with a mode picker); the app reopens on the last mode.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+- openLink: "newsreader://e2e?action=aimock&host=10.0.2.2:8787"
+- extendedWaitUntil:
+    visible:
+      id: "mode-ai"
+    timeout: 30000
+# News is the mode in use, with its tabs; its chip carries an unseen count.
+- assertVisible:
+    id: "mode-news"
+- assertVisible:
+    id: "mode-count-1"
+- assertVisible:
+    id: "feedtab-foryou"
+- assertVisible: "Chancellor raises income tax threshold in autumn budget"
+
+# The AI mode: no News tabs, its own sections.
+- tapOn:
+    id: "mode-ai"
+- assertNotVisible:
+    id: "feedtab-foryou"
+- swipe:
+    start: 50%, 40%
+    end: 50%, 85%
+    duration: 500
+- extendedWaitUntil:
+    visible: "Coding agent now generally available"
+    timeout: 90000
+- assertVisible:
+    id: "mode-count-2"
+
+# Read an AI story; History shows it in the AI mode and not in News.
+- tapOn: "Study: AI pairing at 40 companies"
+- extendedWaitUntil:
+    visible:
+      id: "reader-webview"
+    timeout: 20000
+- back
+- tapOn:
+    id: "tab-history"
+- assertVisible: "Lab publishes study of AI pair programming at 40 companies"
+- tapOn:
+    id: "tab-feed"
+- tapOn:
+    id: "mode-news"
+- assertVisible: "Chancellor raises income tax threshold in autumn budget"
+- tapOn:
+    id: "tab-history"
+- assertNotVisible: "Lab publishes study of AI pair programming at 40 companies"
+
+# Settings: Sources and Learning show the mode picked.
+- tapOn:
+    id: "tab-settings"
+- tapOn:
+    id: "settingstab-sources"
+- tapOn:
+    id: "pick-mode-ai"
+- tapOn:
+    id: "settings-sources"
+- assertVisible: "Vendor blog"
+- assertVisible: "Hacker News"
+- assertNotVisible: "Daily Mail"
+- back
+- tapOn:
+    id: "settingstab-learning"
+- tapOn:
+    id: "pick-mode-ai"
+- tapOn:
+    id: "settings-profile"
+- assertVisible: "Interest profile"
+- assertVisible: "• Coding agents and tools"
+- back
+- tapOn:
+    id: "pick-mode-news"
+- assertVisible:
+    id: "settings-learned"
+
+# The app opens on the last mode used.
+- tapOn:
+    id: "tab-feed"
+- tapOn:
+    id: "mode-ai"
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "sections-list"
+    timeout: 20000
+- assertNotVisible:
+    id: "feedtab-foryou"

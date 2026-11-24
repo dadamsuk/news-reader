@@ -3,10 +3,12 @@ import { router, useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { resetModeLearning } from '../../core/learning';
 import { resetLearning } from '../../core/ranking';
 import type { Settings } from '../../core/settings';
-import { validateOpenRouterKey } from '../../llm/openrouter';
-import { OPENROUTER_KEY_REF } from '../../pipeline/refresh';
+import { monthSpendByMode, validateOpenRouterKey } from '../../llm/openrouter';
+import { ageLabel } from '../../core/util';
+import { OPENROUTER_KEY_REF, lastBackgroundRun } from '../../pipeline/refresh';
 import { registerBackgroundRefresh } from '../../platform/background';
 import { checkpointAndGetPath, getDb } from '../../platform/db';
 import { appFetch } from '../../platform/fetch';
@@ -14,6 +16,7 @@ import { reloadSettings, updateSettings } from '../../platform/runner';
 import { secrets } from '../../platform/secrets';
 import { bumpData, showSnack, useStore } from '../../state/store';
 import { Button, Field, Group, Row, SectionTitle, SwitchRow } from '../../ui/kit';
+import { ModePicker } from '../../ui/ModeBar';
 import { useTheme } from '../../ui/theme';
 
 /** A text field that saves a setting when editing ends, after checking it. */
@@ -83,16 +86,35 @@ export default function SettingsScreen() {
   const [keyError, setKeyError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<SettingsTab>('general');
+  const [bgRun, setBgRun] = useState<string | null>(null);
+  const modes = useStore((st) => st.modes);
+  const currentMode = useStore((st) => st.settings.currentModeId);
+  // Sources and Learning show one mode at a time; they open on the mode in use.
+  const [pickedMode, setPickedMode] = useState<number | null>(null);
+  const modeId = pickedMode ?? currentMode;
+  const picked = modes.find((m) => m.id === modeId);
+  const [spendByMode, setSpendByMode] = useState<Map<number, number>>(new Map());
 
   // The tab stays mounted: bring the values up to date each time it is shown.
   useFocusEffect(
     useCallback(() => {
       reloadSettings().catch(() => {});
       secrets.get(OPENROUTER_KEY_REF).then((k) => setKeySet(!!k)).catch(() => {});
+      getDb().then((db) => monthSpendByMode(db, Date.now())).then(setSpendByMode).catch(() => {});
+      getDb()
+        .then(lastBackgroundRun)
+        .then((r) => setBgRun(
+          !r ? 'Has not run yet'
+            : `Last ran ${ageLabel(r.startedAt, Date.now()) === 'now' ? 'just now' : `${ageLabel(r.startedAt, Date.now())} ago`}`
+              + (r.finished ? `, ${r.newArticles} new ${r.newArticles === 1 ? 'article' : 'articles'}` : ', did not finish'),
+        ))
+        .catch(() => {});
     }, []),
   );
 
   const save = (patch: Partial<Settings>) => updateSettings(patch).catch(() => showSnack('Could not save that setting'));
+  /** For a setting that changes what the feed shows: save, then rebuild the lists. */
+  const saveFeed = (patch: Partial<Settings>) => updateSettings(patch).then(bumpData, () => showSnack('Could not save that setting'));
 
   const saveKey = async () => {
     const k = newKey.trim();
@@ -113,13 +135,18 @@ export default function SettingsScreen() {
   };
 
   const confirmReset = () => {
-    Alert.alert('Reset learning?', 'Ranking goes back to its cold-start behaviour. Read later, History and sources are not touched.', [
+    const name = picked?.name ?? 'News';
+    const sections = picked?.layout.type === 'sections';
+    Alert.alert(`Reset learning for ${name}?`, sections
+      ? 'Tag and source weights are cleared, the starter profile comes back (earlier versions can be restored) and the cold start begins again. Other modes, Read later, History and sources are not touched.'
+      : 'Ranking goes back to its cold-start behaviour. Other modes, Read later, History and sources are not touched.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Reset',
         style: 'destructive',
         onPress: async () => {
-          await resetLearning(await getDb(), Date.now());
+          if (sections) await resetModeLearning(await getDb(), modeId, Date.now());
+          else await resetLearning(await getDb(), Date.now());
           await reloadSettings();
           bumpData();
           showSnack('Learning reset');
@@ -168,6 +195,38 @@ export default function SettingsScreen() {
       <ScrollView testID="settings-screen" keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 60 }}>
         {tab === 'general' ? (
           <>
+            <SectionTitle>Feed</SectionTitle>
+            <Group>
+              <SwitchRow
+                testID="settings-chronological"
+                title="Latest first"
+                subtitle={s.chronological
+                  ? 'For you lists up to 100 recent stories, which stay after you have seen or read them: newest first when unfiltered, best match first when filtered.'
+                  : 'Off: each story shows once, ranked for you, and is gone once it has been on screen.'}
+                value={s.chronological}
+                onChange={(v) => saveFeed({ chronological: v })}
+              />
+              <SwitchRow
+                testID="settings-unfiltered"
+                title="Unfiltered"
+                subtitle={s.unfiltered
+                  ? 'What the app has learned does not choose or order your stories.'
+                  : 'Off: stories are sorted by how well they match what you read, and those below the threshold are left out.'}
+                value={s.unfiltered}
+                onChange={(v) => saveFeed({ unfiltered: v })}
+              />
+            </Group>
+            <SettingField
+              testID="settings-filter-threshold"
+              label="Leave out stories below this match (%)"
+              value={s.filterThreshold}
+              numeric
+              min={0}
+              max={90}
+              onSave={(v) => saveFeed({ filterThreshold: Math.round(Number(v)) })}
+              hint={`When the feed is filtered. Match runs from 5 (least like what you read) to 95 (most), against the other stories on offer, so ${s.filterThreshold || 20} leaves out roughly the bottom ${s.filterThreshold || 20}%. Watched topics always show. 0 leaves nothing out. Tapping Feed switches Unfiltered on and off.`}
+            />
+
             <SectionTitle>Refresh</SectionTitle>
             <SettingField
               testID="settings-refresh"
@@ -180,7 +239,7 @@ export default function SettingsScreen() {
                 await save({ refreshMinutes: Number(v) });
                 registerBackgroundRefresh(Number(v)).catch(() => {});
               }}
-              hint="A request to the system, which decides the actual timing. The app also refreshes whenever it is opened."
+              hint={`A request to the system, which decides the actual timing. The app also refreshes whenever it is opened.${bgRun ? ` Background refresh: ${bgRun.charAt(0).toLowerCase()}${bgRun.slice(1)}.` : ''}`}
             />
             <Group style={{ marginTop: 14 }}>
               <SwitchRow
@@ -226,9 +285,15 @@ export default function SettingsScreen() {
 
         {tab === 'sources' ? (
           <>
-            <SectionTitle>Sources</SectionTitle>
+            <ModePicker value={modeId} onChange={setPickedMode} />
+            <SectionTitle>{`Sources: ${picked?.name ?? 'News'}`}</SectionTitle>
             <Group>
-              <Row testID="settings-sources" title="Sources" subtitle="Outlets, roles, leans, feeds and keys" onPress={() => router.push('/settings/sources')} />
+              <Row
+                testID="settings-sources"
+                title="Sources"
+                subtitle={picked?.layout.type === 'sections' ? 'Feeds, sites and digests, with priority and options' : 'Outlets, roles, leans, feeds and keys'}
+                onPress={() => router.push({ pathname: '/settings/sources', params: { mode: String(modeId) } })}
+              />
             </Group>
           </>
         ) : null}
@@ -260,8 +325,12 @@ export default function SettingsScreen() {
               <Row
                 testID="settings-spend"
                 title={`Spent this month: $${spend.toFixed(spend < 1 ? 3 : 2)}`}
-                subtitle={over ? 'Budget reached: angle notes and summaries are paused until the 1st.' : `Of a $${s.monthlyBudgetUsd} monthly budget`}
+                subtitle={over ? 'Budget reached: model calls are paused until the 1st.' : `Of a $${s.monthlyBudgetUsd} monthly budget, shared by every mode`}
               />
+              {modes.map((m) => {
+                const v = spendByMode.get(m.id) ?? 0;
+                return <Row key={m.id} testID={`settings-spend-${m.id}`} title={m.name} subtitle={`$${v.toFixed(v < 1 ? 3 : 2)} this month`} />;
+              })}
             </Group>
             <SettingField testID="settings-budget" label="Monthly budget (USD)" value={s.monthlyBudgetUsd} numeric min={0} max={1000} onSave={(v) => save({ monthlyBudgetUsd: Number(v) })} />
           </>
@@ -269,13 +338,21 @@ export default function SettingsScreen() {
 
         {tab === 'learning' ? (
           <>
-            <SectionTitle>Learning</SectionTitle>
-            <Group>
-              <Row testID="settings-learned" title="What the app has learned" subtitle="Your likes and dislikes, one by one, and what you read" onPress={() => router.push('/settings/learned')} />
-              <Row testID="settings-topics" title="Muted and watched topics" subtitle="Hide a topic for a while, or never miss one" onPress={() => router.push('/settings/topics')} />
-              <Row testID="settings-ranking" title="Ranking weights and thresholds" onPress={() => router.push('/settings/ranking')} />
-              <Row testID="settings-reset-learning" title="Reset learning" danger onPress={confirmReset} />
-            </Group>
+            <ModePicker value={modeId} onChange={setPickedMode} />
+            <SectionTitle>{`Learning: ${picked?.name ?? 'News'}`}</SectionTitle>
+            {picked?.layout.type === 'sections' ? (
+              <Group>
+                <Row testID="settings-profile" title="Interest profile and what it has learned" subtitle="Your profile (editable), tag weights and the last 50 signals" onPress={() => router.push({ pathname: '/settings/profile', params: { mode: String(modeId) } })} />
+                <Row testID="settings-reset-learning" title="Reset learning for this mode" danger onPress={confirmReset} />
+              </Group>
+            ) : (
+              <Group>
+                <Row testID="settings-learned" title="What the app has learned" subtitle="Your likes and dislikes, one by one, and what you read" onPress={() => router.push('/settings/learned')} />
+                <Row testID="settings-topics" title="Muted and watched topics" subtitle="Hide a topic for a while, or never miss one" onPress={() => router.push('/settings/topics')} />
+                <Row testID="settings-ranking" title="Ranking weights and thresholds" onPress={() => router.push('/settings/ranking')} />
+                <Row testID="settings-reset-learning" title="Reset learning" danger onPress={confirmReset} />
+              </Group>
+            )}
           </>
         ) : null}
 

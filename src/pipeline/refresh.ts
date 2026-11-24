@@ -1,11 +1,13 @@
+import { listModes } from '../core/modes';
 import { finalScore, scoreArticles } from '../core/ranking';
 import { loadSettings, saveSettings } from '../core/settings';
 import type { Secrets } from '../core/sources';
-import type { FetchFn, StepResult } from '../core/types';
+import { HOUR, NEWS_MODE_ID, type FetchFn, type StepResult } from '../core/types';
 import { errMsg, mapLimit, safeJson } from '../core/util';
 import type { Db } from '../db/db';
 import { ensureBody, type Files } from '../reader/body';
 import { stepBriefing, stepStories } from './extras';
+import { runSectionsMode } from './sections';
 import {
   stepCluster, stepDigest, stepEmbed, stepFetch, stepRetention, stepSecondSources, type StepDeps,
 } from './steps';
@@ -26,6 +28,11 @@ export interface RefreshDeps {
   onArticlesReady?: () => void;
   /** Lets a background task stop early when the system is about to end it. */
   shouldStop?: () => boolean;
+  /**
+   * Gives the UI thread a turn between prefetched articles. Left out in a background task: there
+   * is no UI, and on Android JavaScript timers do not fire in the background at all.
+   */
+  yieldUi?: () => Promise<void>;
 }
 
 export interface RefreshResult {
@@ -60,9 +67,10 @@ async function prefetch(deps: RefreshDeps, d: StepDeps): Promise<string> {
   if (d.settings.wifiOnlyPrefetch && !(await deps.isWifi())) return 'skipped: not on Wi-Fi';
   const rows = await d.db.all<any>(
     `SELECT a.id, a.image_url, a.published_at, a.score_a, a.score_s, a.score_i, a.body_html, a.body_tried_at, a.offline_images
-     FROM article a JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
+     FROM article a JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1 AND s.mode_id = ?
      LEFT JOIN impression i ON i.article_id = a.id
      WHERE i.article_id IS NULL AND NOT (s.paywalled = 1 OR s.reader_mode = 'browser')`,
+    [NEWS_MODE_ID],
   );
   const top = rows
     .map((r) => ({ ...r, score: finalScore({ a: r.score_a, s: r.score_s, i: r.score_i, publishedAt: r.published_at }, d.settings, now) }))
@@ -91,7 +99,7 @@ async function prefetch(deps: RefreshDeps, d: StepDeps): Promise<string> {
       // one bad article never stops the rest
     }
     // Give the UI thread a turn between articles.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (deps.yieldUi) await deps.yieldUi();
   });
   if (deps.prefetchThumbs) {
     const thumbs = top.map((r) => r.image_url).filter(Boolean) as string[];
@@ -155,7 +163,7 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   const markReady = async (ids: number[] | null) => {
     const at = deps.now();
     const r = ids == null
-      ? await db.run('UPDATE article SET ready_at = ? WHERE ready_at IS NULL', [at])
+      ? await db.run('UPDATE article SET ready_at = ? WHERE ready_at IS NULL AND mode_id = ?', [at, NEWS_MODE_ID])
       : ids.length
         ? await db.run(`UPDATE article SET ready_at = ? WHERE ready_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, [at, ...ids])
         : { changes: 0 };
@@ -177,7 +185,7 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
     return stepSecondSources(d, {
       checking: async (ids) => {
         const holding = new Set(ids);
-        const rows = await db.all<{ id: number }>('SELECT id FROM article WHERE ready_at IS NULL');
+        const rows = await db.all<{ id: number }>('SELECT id FROM article WHERE ready_at IS NULL AND mode_id = ?', [NEWS_MODE_ID]);
         await markReady(rows.map((r) => r.id).filter((id) => !holding.has(id)));
       },
       checked: (id) => markReady([id]),
@@ -195,7 +203,11 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
   await step('7 Right press', async () => (idle ? NOTHING_NEW : stepDigest(d)));
   await step('7b Followed stories', async () => (idle ? NOTHING_NEW : stepStories(d)));
   await step('7c Briefing', async () => {
-    const info = await stepBriefing(d);
+    // In the background, away long enough for a briefing: write it now, ready for the return.
+    const awaySince = Math.max(settings.lastBackgroundAt, settings.lastActiveAt);
+    const awayLongEnough = trigger === 'background' && settings.lastBackgroundAt > 0
+      && deps.now() - awaySince >= settings.briefingGapHours * HOUR;
+    const info = await stepBriefing(d, awayLongEnough ? awaySince : 0);
     if (info !== 'not due') {
       try {
         deps.onArticlesReady?.();
@@ -204,6 +216,17 @@ async function run(deps: RefreshDeps, trigger: Trigger): Promise<RefreshResult> 
     return info;
   });
   await step('8 Prefetch', () => prefetch(deps, d));
+  // Then every other mode in turn (sections layout), each under its own named steps. A mode with no
+  // enabled source has nothing to do and adds no steps.
+  for (const mode of (await listModes(db)).filter((m) => m.layout.type === 'sections')) {
+    const n = await db.get<{ n: number }>('SELECT COUNT(*) n FROM source WHERE mode_id = ? AND enabled = 1', [mode.id]);
+    if (!n?.n) continue;
+    await runSectionsMode({ ...d, shouldStop: deps.shouldStop }, mode, trigger === 'manual' || trigger === 'setup' || trigger === 'test', step, () => {
+      try {
+        deps.onArticlesReady?.();
+      } catch {}
+    });
+  }
   await step('9 Retention', () => stepRetention(d, deps.files ? (ids) => deps.files!.removeArticles(ids) : undefined));
 
   const finishedAt = deps.now();
@@ -223,4 +246,10 @@ export async function listRuns(db: Db, limit = 20) {
     steps: safeJson<StepResult[]>(r.steps, []),
     newArticles: r.new_articles as number,
   }));
+}
+
+/** The last background refresh: when it started, and whether it finished (null: none yet). */
+export async function lastBackgroundRun(db: Db): Promise<{ startedAt: number; finished: boolean; newArticles: number } | null> {
+  const r = await db.get<any>("SELECT started_at, finished_at, new_articles FROM refresh_run WHERE trigger = 'background' ORDER BY id DESC LIMIT 1");
+  return r ? { startedAt: r.started_at, finished: r.finished_at != null, newArticles: r.new_articles ?? 0 } : null;
 }

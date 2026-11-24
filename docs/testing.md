@@ -3,7 +3,7 @@
 ## Unit and pipeline tests (Jest)
 
 ```
-npm test            # 112 tests, about 10 seconds
+npm test            # about 200 tests, about 15 seconds
 npm run typecheck
 npm run lint
 ```
@@ -32,6 +32,29 @@ cover every acceptance item the spec marks "(test)":
 The features added after the first build (follow a story, full coverage, catch-up briefing, mute
 and watch lists, what the app has learned) are covered by `features.test.ts`. They have no Maestro
 flow yet.
+
+Modes and the AI mode (the PRD in `docs/`) have their own files. `test/helpers/ai.ts` adds an AI
+mode to the fake internet: a vendor feed (high priority), a blog, a digest and Hacker News.
+
+| PRD acceptance item | Test file |
+| --- | --- |
+| News behaviour unchanged after the migration to the News mode | every earlier file, unchanged except the privacy assertion; `mode-data.test.ts` (migration 7) |
+| A third mode through configuration alone | `mode-nav.test.ts` |
+| A thumbs-down in one mode changes nothing in the other | `ai-display-learning.test.ts` |
+| Seen in one mode is not seen in another; Read later and History per mode | `mode-data.test.ts`, `mode-nav.test.ts` |
+| A digest issue with 12 stories gives 12 items | `ai-sources.test.ts`, `ai-pipeline.test.ts` |
+| The same story from 3 sources is one card with "+2 more" | `ai-pipeline.test.ts` |
+| Headline of 10 words or fewer, summary of 20 or fewer | `ai-pipeline.test.ts` |
+| In other news below the main section, 3 to 5 items, hidden when nothing qualifies | `ai-display-learning.test.ts` |
+| Ignoring In other news for 2 weeks does not stop it appearing | `ai-display-learning.test.ts` |
+| Opening 3 left-field items with a shared tag raises the tag's weight | `ai-display-learning.test.ts` |
+| Pinned profile lines survive a rewrite word for word | `ai-display-learning.test.ts` |
+| Closed for 3 days: a processed feed with no expired items | `ai-pipeline.test.ts` |
+| At the budget cap AI cards show source headlines and both modes load | `ai-pipeline.test.ts` |
+| No API key in any model request | `ai-pipeline.test.ts` (and the replaced assertion in `pipeline.test.ts`) |
+
+`LIVE=1 npx jest test/live-ai.test.ts` runs a first AI-mode refresh against the real default sources
+and OpenRouter, and prints the feed and what it cost (about $0.25).
 
 ### Live checks (optional, cost a cent or two)
 
@@ -74,6 +97,11 @@ On the iOS simulator the mock is `localhost:8787`: change the host in the `openL
 | `03-reader-later` | Reader shows headline, byline, text and pictures; save from the reader; swipe right dismisses, with undo; reading to the end marks a saved item done and moves it to History; swipe left with undo; long-press menu; fallback to the adapter body |
 | `04-bbc-primary` | BBC News as primary with the Guardian disabled gives a BBC-only feed, with second sources and Right press still working (the spec's e2e item) |
 | `05-budget-health` | A $0.01 budget stops model calls and shows the banner while the feed still loads; a broken feed turns red, Test shows the error, other sources still refresh |
+| `06-ai-feed` | The AI mode's sources (`newsreader://e2e?action=aimock`) refresh into the two sections: one story from four sources as one card with "+3 more", rewritten headline, one-line summary and "why it matters", the long-press menu and Why am I seeing this, save with undo, swipe left and its sheet, Show more, In other news with its label, Read later per mode |
+| `07-modes` | The mode bar with unseen counts; each mode's own feed and History; Settings, Sources and Learning with the mode picker; the app reopens on the last mode used |
+
+The `mock` action switches every other mode's sources off, so flows 01 to 05 see News exactly as
+before modes. `aimock` gives the AI mode the mock server's AI sources.
 
 ### The seen-rule audit
 

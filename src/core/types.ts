@@ -1,4 +1,6 @@
-export type AdapterType = 'guardian_content_api' | 'rss' | 'google_news_search';
+export type AdapterType = 'guardian_content_api' | 'rss' | 'google_news_search' | 'hn_api' | 'html_list';
+/** Which item becomes a story's main link when several sources cover it (sections-layout modes). */
+export type Priority = 'high' | 'normal' | 'low';
 export type Role = 'primary' | 'perspective';
 export type Lean = 'left' | 'centre-left' | 'centre' | 'centre-right' | 'right';
 export type ReaderMode = 'extract' | 'api_body' | 'browser';
@@ -11,12 +13,15 @@ export type InteractionKind =
   /** Open for five seconds or more: the card leaves the feeds (History still lists it). Teaches nothing by itself. */
   | 'viewed'
   /** Swiped away: the card leaves the feeds and counts exactly as if it had been scrolled past. */
-  | 'hidden';
+  | 'hidden'
+  /** Sections layout: opened one of the other sources behind a card's "+N more". */
+  | 'open_more';
 
 /** Why a swipe asked for less: one part of the article, not all of it. */
 export type LessReason = 'source' | 'section' | 'topic';
 
-export const ADAPTERS: AdapterType[] = ['guardian_content_api', 'rss', 'google_news_search'];
+export const ADAPTERS: AdapterType[] = ['guardian_content_api', 'rss', 'google_news_search', 'hn_api', 'html_list'];
+export const PRIORITIES: Priority[] = ['high', 'normal', 'low'];
 export const ROLES: Role[] = ['primary', 'perspective'];
 export const LEANS: Lean[] = ['left', 'centre-left', 'centre', 'centre-right', 'right'];
 export const READER_MODES: ReaderMode[] = ['extract', 'api_body', 'browser'];
@@ -40,9 +45,19 @@ export interface Source {
   lastError: string | null;
   lastFetchAt: number | null;
   lastNewAt: number | null;
+  /** The mode the source belongs to (each source is in exactly one). */
+  modeId: number;
+  /** Sections layout: which source's item leads a story covered by several. */
+  priority: Priority;
+  /** A digest: each issue links to many stories and is split into one item per story. */
+  isDigest: boolean;
+  /** Adapter options, e.g. the Hacker News points threshold and keywords. */
+  config: Record<string, unknown>;
 }
 
-export type SourceInput = Omit<Source, 'id' | 'lastOkAt' | 'lastError' | 'lastFetchAt' | 'lastNewAt'>;
+/** A source as entered. The mode fields default to News, normal priority, not a digest, no options. */
+export type SourceInput = Omit<Source, 'id' | 'lastOkAt' | 'lastError' | 'lastFetchAt' | 'lastNewAt' | 'modeId' | 'priority' | 'isDigest' | 'config'>
+  & Partial<Pick<Source, 'modeId' | 'priority' | 'isDigest' | 'config'>>;
 
 /** What an adapter returns before normalisation. */
 export interface RawItem {
@@ -58,6 +73,14 @@ export interface RawItem {
   wordCount?: number;
   externalId?: string;
   adapterBody?: string;
+  /** Hacker News points, when the item came from (or is on) Hacker News. */
+  hnPoints?: number;
+  /** A digest's own words about this story, kept as context for summarising. */
+  digestContext?: string;
+  /** The entry's own HTML (content, else description), kept only while a digest issue is split. */
+  contentHtml?: string;
+  /** Where the other source discussed it (the Hacker News thread, the digest issue). */
+  mentionUrl?: string;
 }
 
 export interface Article {
@@ -107,6 +130,10 @@ export interface FeedCard {
   watch: string | null;
   /** Part of a story being followed. */
   following: boolean;
+  /** For you: how well it suits him compared with the other stories on offer, 5 to 95 (see relativeMatch). */
+  match?: number | null;
+  /** Already read (open five seconds or more). Only the Latest first feed keeps such cards. */
+  opened?: boolean;
 }
 
 export type TopicRuleKind = 'mute' | 'watch';
@@ -211,6 +238,10 @@ export type FetchFn = (url: string, init?: {
   body?: string;
   timeoutMs?: number;
 }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }>;
+
+/** The News mode (the original app, News layout) and the AI mode, as created by migration 7. */
+export const NEWS_MODE_ID = 1;
+export const AI_MODE_ID = 2;
 
 export const HOUR = 3600_000;
 export const DAY = 24 * HOUR;

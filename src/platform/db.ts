@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { seedModes } from '../core/modes';
 import { seedDefaultSources } from '../core/sources';
 import { makeTx, migrate, type Db, type Param } from '../db/db';
 
@@ -25,7 +26,7 @@ function wrap(raw: SQLite.SQLiteDatabase): Db {
   };
 }
 
-/** Opens (once) the app database, applies migrations and seeds the default sources on first run. */
+/** Opens (once) the app database, applies migrations and seeds each mode's default sources on first run. */
 export function getDb(): Promise<Db> {
   if (!opening) {
     opening = (async () => {
@@ -35,6 +36,7 @@ export function getDb(): Promise<Db> {
       const db = wrap(raw);
       await migrate(db);
       await seedDefaultSources(db);
+      await seedModes(db, Date.now());
       return db;
     })();
     opening.catch(() => {

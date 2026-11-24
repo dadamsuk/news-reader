@@ -13,7 +13,7 @@ export interface SourceTestResult {
 /** The Test button: fetch once and show the first five items, or the error. Nothing is stored. */
 export async function testSource(
   fetchFn: FetchFn,
-  source: Pick<Source, 'adapter' | 'endpoint' | 'name' | 'includeSections' | 'excludeSections'>,
+  source: Pick<Source, 'adapter' | 'endpoint' | 'name' | 'includeSections' | 'excludeSections'> & Partial<Pick<Source, 'isDigest' | 'config'>>,
   apiKey: string | null,
   now: number,
 ): Promise<SourceTestResult> {

@@ -12,6 +12,8 @@ import { useTheme } from '../../ui/theme';
 export default function HistoryScreen() {
   const t = useTheme();
   const dataVersion = useStore((s) => s.dataVersion);
+  // History lists the current mode's items only.
+  const modeId = useStore((s) => s.settings.currentModeId);
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<Row[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -22,7 +24,7 @@ export default function HistoryScreen() {
     // A short pause while typing keeps the search from running on every keystroke.
     const timer = setTimeout(() => {
       getDb()
-        .then((db) => loadHistory(db, Date.now(), query))
+        .then((db) => loadHistory(db, Date.now(), query, 300, modeId))
         .then((r) => {
           if (mine !== seq.current) return;
           setRows(r);
@@ -31,7 +33,7 @@ export default function HistoryScreen() {
         .catch(() => setRows([]));
     }, query ? 180 : 0);
     return () => clearTimeout(timer);
-  }, [query, dataVersion]);
+  }, [query, dataVersion, modeId]);
 
   // Opening from History reads the article; it does not go back into the feed.
   const onPress = useCallback((row: Row) => {

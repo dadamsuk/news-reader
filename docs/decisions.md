@@ -7,7 +7,8 @@ The spec is [spec.md](spec.md). Section references below are to its headings.
 
 ## 1. What to check first
 
-These are the choices most worth a second opinion.
+These are the choices most worth a second opinion. For modes and the AI mode (24 November 2026),
+see the items marked **check** in section 15.
 
 | # | Decision | Why | To change it |
 | --- | --- | --- | --- |
@@ -57,6 +58,9 @@ These are the choices most worth a second opinion.
 - **Lint** is Expo's ESLint config (`npm run lint`), added during the build and clean. It includes the React Compiler rules, which is why a few components avoid effects that only copy props into state.
 - **A config plugin in `app.config.ts` raises Gradle's memory.** The generated default (512 MB of metaspace) fails a release build of this many native modules.
 - **EAS Update is off until `eas init` has run.** `app.config.ts` only sets the update URL when `EAS_PROJECT_ID` is present, so a local build never points at a project that does not exist.
+- **Network requests use XMLHttpRequest, never `fetch` (`src/platform/fetch.ts`).** Found on a real phone (24 Nov 2026): background refresh never completed. On Android, React Native stops firing JavaScript timers while the app is in the background (`JavaTimerManager` pauses them unless a HeadlessJS task is running, and `expo-task-manager` does not start one). RN's `fetch` is the whatwg-fetch polyfill, which resolves every response inside `setTimeout(0)`, so the first request of a background run waited forever and Android ended the job (`dumpsys jobscheduler` showed two job timeouts in a day). The stuck run then held the refresh lock until the app was opened, timers resumed, and it finished in front of you, which is why the briefing appeared only after some minutes in the app. The XHR's `timeout` is enforced by OkHttp natively, so a stalled request still fails. **Rule: nothing a refresh awaits may depend on a timer.** The prefetch step's yield to the UI thread is passed in and is skipped unless the app is on screen.
+- **A background run stops starting new steps after six minutes** (Android ends a job at about ten), so it is recorded as finished, not killed.
+- **The catch-up briefing is written in the background** once the app has been away for the briefing gap, so it is on screen the moment the app opens. A later run rewrites it only if the set of stories changed; otherwise no model call is made.
 - **Runtime version policy is `appVersion`.** A JavaScript-only update reaches any build with the same `version`; bump `version` when native code changes.
 
 ## 4. Sources
@@ -82,7 +86,7 @@ These are the choices most worth a second opinion.
 - **Right press makes one call per new story** (four at a time), returning both the neutral summary and, when a primary headline falls in the grey zone, whether the primary covered it. Stories are rechecked against new primary articles on every refresh and drop out if covered later. A summary is written once.
 - **At the budget cap** embeddings continue (they cost fractions of a cent), model calls stop, second sources show the best candidate at or above 0.80 with the text "Also covering this story", and Right press shows a headline instead of a summary. A grey-zone Right press story waits, rather than risk showing something the primary did cover. When the month turns, missing notes and summaries are filled in.
 - **Cost is taken from the `usage.cost` figure in each response** when present, else from token counts and the per-million prices in Settings.
-- **Prompts** ask for British spelling, neutral wording, and no reference to "the primary" or "the candidate". Only headlines, standfirsts and article text are sent; a test asserts this.
+- **Prompts** ask for British spelling, neutral wording, and no reference to "the primary" or "the candidate". The News prompts send headlines, standfirsts and article text. Since modes (section 15) the rule is "nothing secret leaves the phone": any app data may be sent, API keys never are, and a test checks every model request for keys.
 - **Live result on 22 Nov 2026, before lowering thresholds:** 12 of 60 primary articles matched; Right press found 8 stories.
 - **After tuning:** 21 of 60 matched with 24 model calls, including all of the eight highest-ranked cards. I read all 21 pairs and every one was the same event. For example, the Guardian's "Suffolk village votes to 'leave the UK'" was paired with GB News: "Emphasises safety concerns and characterises asylum seekers as 'unvetted males'; frames as protest against Labour rather than government plans." Every note was 20 words or fewer. Right press found 12 stories, each from two right-leaning outlets and none covered by the Guardian (a stabbing in Oldham, a Poundland takeover bid, the King and the mansion tax, and so on), with neutral one-sentence summaries. That is one evening's sample (a quiet Saturday night), not the spec's spot-check over real use.
 
@@ -344,3 +348,176 @@ is no Maestro flow for them. Migration 3 adds the tables; it only creates, so ex
   folder) was silently ignoring the new `src/app/coverage/` screen.
 - **Extra LLM cost** is one call per followed story with new coverage per refresh, one per briefing,
   and one per comparison you ask for, each about the size of a second-source check ($0.002).
+
+## 15. Modes and the AI mode (24 November 2026)
+
+Built from [the PRD](News%20Reader%20PRD%20Modes%20and%20the%20AI%20mode.md). Where it and the
+sections above disagree, the PRD wins and the sections above have been changed to match (the
+privacy rule in section 5; spec.md throughout). Each decision below is a choice I made; the ones
+marked **check** are those most worth a second look.
+
+### What was verified
+
+- **Jest: 195 tests pass** (53 of them new, in `mode-data`, `mode-nav`, `ai-sources`,
+  `ai-pipeline` and `ai-display-learning`), typecheck and lint clean. No earlier test changed except
+  the one the PRD retires: the assertion that the match prompt carries no reading history became
+  one that it carries no API key, and a new test checks every model request for keys.
+- **The earlier tests still pin News behaviour**, including the exact list of refresh steps: the
+  AI mode adds steps only when it has an enabled source, which no earlier test has.
+- **Live, in Node, with the real default sources and OpenRouter** (`test/live-ai.test.ts`): see
+  "Live result" below.
+- **Emulator and Maestro**: see "On the emulator" below.
+
+### Data and migration
+
+- **Migration 7 only adds.** It creates `mode` (News is id 1, AI id 2), adds `mode_id` and the new
+  columns, and the new tables. `article` is rebuilt so the canonical URL is unique per mode; every
+  row and id is kept, and so is the table's AUTOINCREMENT position, because `interaction` rows
+  outlive their articles and a reused id would hand an old "hidden" to a new story (tested).
+- **News's settings are copied into the News mode and also left in `setting`** (the brief said
+  never lose data). The mode's copy is the one read and written from now on; the old rows are inert.
+  The column is `sort_order`, not `order` (a reserved word).
+- **News's settings stay readable through `loadSettings`**, which merges the News mode's settings
+  over the shared ones, and `saveSettings` routes each key to the right place. That kept every
+  existing caller and test unchanged.
+- **Every News query filters on the News mode** (sources, articles, clusters, feature stats,
+  centroids, topic rules, stories, briefings, Pulse, the reading diet). `listSources`,
+  `loadReadLater`, `loadHistory`, `exportSources` and `importSources` take a mode, News by default.
+- **A signal reaches the right model through one door**: `applySignal` looks up the article's mode
+  and hands sections-layout articles to the new learning module. So every existing action (save,
+  thumbs, swipe, read, "seen, not opened") teaches the mode the card is in, and only that mode.
+- **The AI mode's sources and starter profile are seeded by the app on first start**, once
+  (`seedModes`), not by the migration: an install's first start after updating gets them, and
+  deleting them all later does not bring them back. `createMode` adds a further mode from a
+  definition alone (tested with a third, "Climate", mode).
+- **The News layout is bound to the News mode.** A third mode can use the sections layout through
+  configuration alone; a second News-layout mode would need the News-only features (Pulse, the
+  briefing, followed stories) to take a mode, which the PRD keeps out of v1. **Check.**
+
+### Sources (all URLs checked live on 24 Nov 2026)
+
+| Source | Adapter and URL | Notes |
+| --- | --- | --- |
+| Simon Willison's Weblog | rss `https://simonwillison.net/atom/everything/` | |
+| Latent Space | rss `https://latent.space/feeds/articles.xml` | **Substitute**: `latent.space/feed` now also carries AINews issues, so the articles-only feed |
+| AINews (smol.ai) | rss `https://latent.space/feeds/news.xml`, digest | **Substitute**: AINews moved into Latent Space; `news.smol.ai/rss.xml` stopped on 9 Sep 2026 and `news.smol.ai` redirects. Reader mode browser (most links are X posts) |
+| TLDR AI | rss `https://tldr.tech/api/rss/ai`, digest | Feed entries are bare links: each issue page is fetched and split |
+| Engineering Enablement (DX) | rss `https://newsletter.getdx.com/feed` | |
+| The Pragmatic Engineer | rss `https://newsletter.pragmaticengineer.com/feed` | Paywalled, reader mode browser |
+| Interconnects | rss `https://www.interconnects.ai/feed` | |
+| Import AI | rss `https://importai.substack.com/feed` | (`jack-clark.net/feed/` also works) |
+| Hacker News | hn_api `.../v0/topstories.json` and `beststories.json` | 60 from each list, 150 points, AI keyword list in the source's options |
+| Anthropic | html_list `https://www.anthropic.com/news` | No feed (`/rss.xml` is 404). Links matching `^/news/<slug>`, titles of 4+ words, date from the card |
+| OpenAI | rss `https://openai.com/news/rss.xml` | |
+| Google (Gemini and DeepMind) | rss: the Gemini, DeepMind and Google AI blog feeds | The blog.google feeds moved (`/products-and-platforms/products/gemini/rss/`, `/innovation-and-ai/technology/ai/rss/`); the new addresses are used |
+| GitHub Copilot changelog | rss `https://github.blog/changelog/label/copilot/feed/` | |
+| Cursor changelog | rss `https://cursor.com/changelog/rss.xml` | |
+
+- **Priorities:** vendors high; blogs and newsletters normal; AINews, TLDR and Hacker News low.
+  Within a priority an original item beats a digest's.
+- **One item per URL per mode, and further sources become coverage.** When a second source brings a
+  URL the mode already has (Hacker News linking to a vendor post, a digest linking to it), it is
+  recorded as a mention (`article_mention`, a new table): it counts as a source of the story, adds
+  its Hacker News points and digest words, and shows under "+N more" (Hacker News as its thread).
+  If the newcomer has the higher priority it takes the item over and the old owner becomes the
+  mention. The PRD asks both to "dedupe on canonical URL within the mode" and that the "same
+  canonical URL joins immediately"; this does both.
+- **Digest splitting** takes the issue's blocks (`<article>`, else top-level list items, else
+  paragraphs) that link away from the digest's own site; the story link is the first one that is not
+  social discussion (X, Reddit, Discord, YouTube and so on), else the first; sponsored blocks,
+  sign-ups and forms are skipped; at most 25 stories an issue (an option). On the real issues: TLDR
+  gave its 13 stories with the sponsors and the sign-up form left out; an AINews issue gave 25
+  (capped) of about 40 story blocks.
+- **The prefilter runs before storing**: items older than the max age are not taken in, and a
+  Hacker News story under 150 points is not stored, so it is looked at again when its points grow.
+  Hacker News is read in full each fetch and points are updated.
+
+### Pipeline
+
+- **Steps** (named in Debug "AI: 1 Fetch, split and prefilter" to "AI: 5 Profile") run after News's
+  prefetch and before the shared retention, in the same run, under the same lock and the same
+  six-minute background limit. No timers; network through `src/platform/fetch.ts`.
+- **Enrichment: one model call per story, five stories to a request** (`enrichBatchSize`). The PRD
+  says both "one Haiku call per cluster" and "batch calls where possible"; batching several stories
+  into one request keeps each story to one call's worth and costs about 40% less (the profile and
+  rules are sent once per request). Set it to 1 for literally one request per story. **Check.**
+- **The limits are enforced in code as well as asked for**: over-long headlines, summaries and "why"
+  lines are cut at 10, 20 and 15 words; em dashes, exclamation marks and the named hype words are
+  removed; tags outside the mode's taxonomy are dropped. The prompt asks for 9, 18 and 12 words, so
+  cuts are rare (the live run before that change cut many "why" lines mid-sentence).
+- **A story not yet enriched** (budget cap, or the call failed) shows in the main section with its
+  source's headline, as the PRD's at-cap rule says. The "10 words" acceptance item therefore holds
+  for enriched cards; a raw source headline can be longer. **Check.**
+- **"Why am I seeing this"** needs to know which profile lines drove the score, so the enrichment
+  (and the rescoring call) also returns up to two profile lines; they are shown with the tag and
+  source weights.
+- **Rescoring after a profile change** is one call per 25 unseen stories, asking only for the
+  match. It runs at the next refresh after an edit, restore, reset or rewrite.
+- **Significance labels**: the PRD's three labels come from whichever of coverage, Hacker News or a
+  high-priority release contributed most; when only the model's impact score is non-zero the label is
+  "High impact" (a fourth label). Coverage counts from the second source: one source gives 0, five
+  give the full 0.35. Hacker News is full at 500 points. **Check** both scales.
+- **Expiry** is counted from the story's first publication: 7 days, or 14 at significance 0.8 and
+  above. Expired and held-back stories stay in the database until the shared 14-day retention.
+
+### Learning
+
+- **Signals** carry the PRD's starting weights, all in the mode's settings. "Read" in the AI mode is
+  reaching the end (90% scroll) or staying for 60% of the read time estimated from the article's
+  length (230 words a minute), with the 5-second floor; there is no bounce signal. "Opened" is the
+  first open only. A "+N more" source opened counts on the card's story.
+- **EMA**: each signal moves every tag of the story, and the primary item's source, a tenth of the
+  way to the signal's weight. Undo runs the average backwards. "Less like this, because…" moves only
+  the source or only the tags. Weights are kept between -1 and 1.
+- **Graduation**: three opened In other news stories sharing a tag within 30 days raise the tag by
+  0.25 (one "step"; the PRD does not size it), once per 30 days per tag, and the next rewrite is
+  told. **Check** the step size.
+- **The profile rewrite** is due after 50 signals or a week, but only if there is at least one new
+  signal (a weekly rewrite of nothing would only spend money). Pinned lines are put in the prompt and
+  then enforced in code: a pinned line the model dropped or reworded goes back, word for word, under
+  the heading it was under.
+- **Pinning**: a line he adds or changes in an edit is pinned; a pinned line he deletes is gone;
+  long-press a line on the Learning screen to pin or unpin it. Every save, rewrite, restore and reset
+  is a new version. The starter profile is recorded as written by "starter" (the PRD lists only llm
+  and user).
+- **Reset learning for the AI mode** clears its tag and source weights, starts the cold start again,
+  and makes the starter profile the newest version (earlier versions can be restored). Item state is
+  untouched. In News it does what it always did, for News only. **Check** that the profile should
+  go back too (the PRD counts it as learning state).
+- **Cold start**: two weeks from the mode's first start (or a reset): relevance threshold 0.4 and
+  five In other news stories.
+
+### Display
+
+- **Cards** follow the PRD: rewritten headline, one-line summary, "why it matters" (main section
+  only), source, "+N more" (tap to list the other sources' links), read time, age, and on In other
+  news cards the reason label. Same actions as News: tap, bookmark, thumbs up and down, swipe right
+  to hide, swipe left for "less because" (this source, or these topics), long press for the menu
+  (More like this, Less like this, Why am I seeing this, Share link).
+- **Seen** is the News rule, applied per story: a card is seen at half on screen, stays for the
+  session, then is gone for good in this mode (any item of the story seen counts). Cards not yet
+  revealed by Show more are not drawn, so cannot be seen.
+- **Tapping Feed again** scrolls a sections-layout feed to the top. The mode bar is hidden if there
+  is only one mode. The budget banner says what the cap means in the mode on screen.
+
+### Live result (real sources, real OpenRouter, first refresh from an empty database)
+
+All 14 sources fetched without error. 275 items (125 from AINews issues, 72 from TLDR's five
+issues) gave 234 stories; 229 were enriched in 47 requests, 5 were left for the next run. The AI
+part of the refresh took 79 seconds (enrichment 69 s) and **cost $0.24** ($0.243 enrichment,
+$0.0004 embeddings), about 59,000 tokens in and 37,000 out. Later refreshes only enrich new stories
+(a few cents a day), in line with the PRD's $4 to $8 a month.
+
+The headlines and summaries read well: plain, specific, with the source's numbers. For example
+"Google releases Gemini 4 Neon with 1M token context window", from five sources (Google, Copilot's
+changelog, Simon Willison, AINews, TLDR), labelled "Widely covered".
+
+**Check: In other news will often be empty with the PRD's numbers.** On this run only 2 of 234
+stories reached significance 0.6, and both were relevant enough for the main section. A story from
+one source can score at most 0.45 (a vendor release 0.2 plus impact 0.25), and 90% of stories had
+one source. Good left-field candidates sat just under the bar: Nvidia reinstating Jensen Huang (0.47,
+2,774 points on Hacker News) and Genie 4 (0.49). I kept the PRD's 0.6; about 0.45 would have filled
+the section on this sample. It is `otherNewsMinSignificance` in the mode's settings.
+
+**Check: the cold start lets most stories into the main section**: 191 of 234 passed relevance 0.4
+(0.6 × match + 0.4 × 0.5 needs a match of only 0.33). It is the PRD's value, and Show more pages it.

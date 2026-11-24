@@ -250,6 +250,158 @@ export const MIGRATIONS: string[] = [
   UPDATE source SET endpoint = 'https://www.dailymail.com/news/index.rss' || char(10) || 'https://www.dailymail.com/news/uk-politics/index.rss'
    WHERE endpoint = 'https://www.dailymail.co.uk/news/index.rss' || char(10) || 'https://www.dailymail.co.uk/news/uk-politics/index.rss';
   `,
+  // 7: modes. Everything that exists becomes the News mode (id 1); the AI mode (id 2) is created
+  // empty (its sources and starter profile are seeded by the app, see core/modes.ts). Only adds:
+  // the settings News now owns are copied into its mode row and left in place in "setting".
+  // "article" is rebuilt so its canonical URL is unique per mode, keeping every row and id, and
+  // the AUTOINCREMENT position, so a new article never takes the id of a deleted one (interaction
+  // rows outlive their articles).
+  `
+  CREATE TABLE mode (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    icon TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    layout TEXT NOT NULL,
+    settings TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+  );
+  INSERT INTO mode(id, name, icon, sort_order, layout, settings, created_at)
+  VALUES (1, 'News', 'newspaper-outline', 1, '{"type":"news"}',
+          (SELECT json_group_object(key, json(value)) FROM setting WHERE key IN (
+            'weightA','weightS','weightF','weightI','coldStartDays','coldStartFactor','learningStartedAt',
+            'clusterThreshold','matchThreshold','digestCoveredThreshold','digestGreyLow','capMatchThreshold','followThreshold',
+            'chronological','unfiltered','filterThreshold','pulseHidden')),
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+  INSERT INTO mode(id, name, icon, sort_order, layout, settings, created_at)
+  VALUES (2, 'AI', 'hardware-chip-outline', 2,
+          '{"type":"sections","sections":[{"type":"ranked","title":"Stuff you''re interested in"},{"type":"other_news","title":"In other news..."}]}',
+          '{}', CAST(strftime('%s','now') AS INTEGER) * 1000);
+
+  ALTER TABLE source ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE source ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal';
+  ALTER TABLE source ADD COLUMN is_digest INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE source ADD COLUMN config TEXT NOT NULL DEFAULT '{}';
+  CREATE INDEX source_mode ON source(mode_id);
+
+  ALTER TABLE cluster ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE cluster ADD COLUMN primary_article_id INTEGER;
+  ALTER TABLE cluster ADD COLUMN headline TEXT;
+  ALTER TABLE cluster ADD COLUMN summary TEXT;
+  ALTER TABLE cluster ADD COLUMN why_it_matters TEXT;
+  ALTER TABLE cluster ADD COLUMN tags TEXT;
+  ALTER TABLE cluster ADD COLUMN item_type TEXT;
+  ALTER TABLE cluster ADD COLUMN profile_match REAL;
+  ALTER TABLE cluster ADD COLUMN impact REAL;
+  ALTER TABLE cluster ADD COLUMN relevance REAL;
+  ALTER TABLE cluster ADD COLUMN significance REAL;
+  ALTER TABLE cluster ADD COLUMN section TEXT;
+  ALTER TABLE cluster ADD COLUMN expires_at INTEGER;
+  ALTER TABLE cluster ADD COLUMN enriched_at INTEGER;
+  ALTER TABLE cluster ADD COLUMN enrich_tried_at INTEGER;
+  ALTER TABLE cluster ADD COLUMN enrich_error TEXT;
+  ALTER TABLE cluster ADD COLUMN profile_version INTEGER;
+  ALTER TABLE cluster ADD COLUMN why_lines TEXT;
+  ALTER TABLE cluster ADD COLUMN reason TEXT;
+  ALTER TABLE cluster ADD COLUMN source_count INTEGER;
+  ALTER TABLE cluster ADD COLUMN hn_points INTEGER;
+  CREATE INDEX cluster_mode ON cluster(mode_id, created_at);
+
+  ALTER TABLE feature_stat ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE centroid ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE topic_rule ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE story ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE briefing ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE llm_usage ADD COLUMN mode_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE interaction ADD COLUMN weight REAL;
+  ALTER TABLE interaction ADD COLUMN section TEXT;
+
+  CREATE TEMP TABLE article_seq AS SELECT seq FROM sqlite_sequence WHERE name = 'article';
+  CREATE TABLE article_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode_id INTEGER NOT NULL DEFAULT 1,
+    source_id INTEGER NOT NULL,
+    canonical_url TEXT NOT NULL,
+    url TEXT NOT NULL,
+    external_id TEXT,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    image_url TEXT,
+    published_at INTEGER NOT NULL,
+    section TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    tone TEXT,
+    byline TEXT,
+    word_count INTEGER,
+    embedding BLOB,
+    cluster_id INTEGER,
+    body_html TEXT,
+    body_source TEXT,
+    body_tried_at INTEGER,
+    adapter_body TEXT,
+    offline_images TEXT,
+    fetched_at INTEGER NOT NULL,
+    ready_at INTEGER,
+    score_a REAL NOT NULL DEFAULT 0,
+    score_s REAL NOT NULL DEFAULT 0,
+    score_i REAL NOT NULL DEFAULT 0,
+    digest_context TEXT,
+    hn_points INTEGER,
+    UNIQUE (mode_id, canonical_url)
+  );
+  INSERT INTO article_new(id, mode_id, source_id, canonical_url, url, external_id, title, summary, image_url, published_at,
+      section, tags, tone, byline, word_count, embedding, cluster_id, body_html, body_source, body_tried_at, adapter_body,
+      offline_images, fetched_at, ready_at, score_a, score_s, score_i)
+    SELECT a.id, COALESCE((SELECT s.mode_id FROM source s WHERE s.id = a.source_id), 1), a.source_id, a.canonical_url, a.url,
+      a.external_id, a.title, a.summary, a.image_url, a.published_at, a.section, a.tags, a.tone, a.byline, a.word_count,
+      a.embedding, a.cluster_id, a.body_html, a.body_source, a.body_tried_at, a.adapter_body, a.offline_images, a.fetched_at,
+      a.ready_at, a.score_a, a.score_s, a.score_i
+    FROM article a;
+  DROP TABLE article;
+  ALTER TABLE article_new RENAME TO article;
+  DELETE FROM sqlite_sequence WHERE name = 'article';
+  INSERT INTO sqlite_sequence(name, seq)
+    SELECT 'article', MAX(COALESCE((SELECT seq FROM article_seq), 0), COALESCE((SELECT MAX(id) FROM article), 0));
+  DROP TABLE article_seq;
+  CREATE INDEX article_source_pub ON article(source_id, published_at);
+  CREATE INDEX article_pub ON article(published_at);
+  CREATE INDEX article_cluster ON article(cluster_id);
+  CREATE INDEX article_mode_pub ON article(mode_id, published_at);
+
+  CREATE TABLE article_mention (
+    article_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    hn_points INTEGER,
+    context TEXT,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (article_id, source_id)
+  );
+  CREATE TABLE tag_weight (
+    mode_id INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    weight REAL NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (mode_id, tag)
+  );
+  CREATE TABLE source_weight (
+    mode_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    weight REAL NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (mode_id, source_id)
+  );
+  CREATE TABLE profile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode_id INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    markdown TEXT NOT NULL,
+    pinned_lines TEXT NOT NULL DEFAULT '[]',
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (mode_id, version)
+  );
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { whyThis, type WhyLine } from '../core/ranking';
 import type { FeedCard, LessReason } from '../core/types';
@@ -177,9 +177,11 @@ export function LessBecauseSheet({ card, onClose, onPick }: {
 }
 
 /** Tapping Feed again: pick one category to show, or all of them. */
-export function CategorySheet({ visible, categories, total, selected, onPick, onClose }: {
+export function CategorySheet({ visible, categories, total, selected, onPick, onClose, unfiltered, threshold, onUnfiltered }: {
   visible: boolean; categories: { name: string; count: number }[]; total: number; selected: string | null;
   onPick: (category: string | null) => void; onClose: () => void;
+  /** The Unfiltered switch, shown above the categories. */
+  unfiltered: boolean; threshold: number; onUnfiltered: (v: boolean) => void;
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -206,6 +208,26 @@ export function CategorySheet({ visible, categories, total, selected, onPick, on
     <Modal transparent animationType="fade" visible onRequestClose={onClose} statusBarTranslucent>
       <Pressable testID="category-backdrop" style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
       <View testID="category-sheet" style={[styles.sheet, { backgroundColor: t.card, paddingBottom: insets.bottom + 10, maxHeight: '75%' }]}>
+        <View style={styles.filterRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.menuLabel, { color: t.text, fontWeight: '700' }]}>Unfiltered</Text>
+            <Text style={{ color: t.muted, fontSize: 13, lineHeight: 18 }}>
+              {unfiltered
+                ? 'Every story, in time or news order; what the app has learned changes nothing.'
+                : threshold > 0
+                  ? `Best match first; stories under a ${threshold}% match are left out.`
+                  : 'Best match first; nothing is left out.'}
+            </Text>
+          </View>
+          <Switch
+            testID="feed-unfiltered"
+            value={unfiltered}
+            onValueChange={onUnfiltered}
+            trackColor={{ true: t.accent, false: t.border }}
+            thumbColor="#ffffff"
+          />
+        </View>
+        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: t.border, marginBottom: 10 }} />
         <Text style={[styles.sheetHeading, { color: t.text, paddingBottom: 8 }]}>Show a category</Text>
         <ScrollView>
           {option(null, 'All categories', total, 'category-all')}
@@ -219,12 +241,15 @@ export function CategorySheet({ visible, categories, total, selected, onPick, on
 export function BudgetBanner() {
   const t = useTheme();
   const over = useStore((s) => s.overBudget);
+  const sections = useStore((s) => s.modes.find((m) => m.id === s.settings.currentModeId)?.layout.type === 'sections');
   if (!over) return null;
   return (
     <View testID="budget-banner" style={[styles.banner, { backgroundColor: t.banner }]}>
       <Ionicons name="alert-circle-outline" size={16} color={t.bannerText} />
       <Text style={[styles.bannerText, { color: t.bannerText }]}>
-        Monthly LLM budget reached. Angle notes and Right summaries are paused until the 1st.
+        {sections
+          ? 'Monthly LLM budget reached. New stories show their source headline until the 1st, when they are summarised.'
+          : 'Monthly LLM budget reached. Angle notes and Right summaries are paused until the 1st.'}
       </Text>
     </View>
   );
@@ -243,6 +268,7 @@ const styles = StyleSheet.create({
   sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 14 },
   sheetTitle: { fontSize: 13, paddingHorizontal: 20, paddingBottom: 10, lineHeight: 18 },
   sheetHeading: { fontSize: 17, fontWeight: '700', paddingHorizontal: 20, paddingBottom: 4 },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingBottom: 14 },
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingVertical: 15 },
   menuLabel: { fontSize: 16 },
   why: { marginHorizontal: 16, marginBottom: 6, borderRadius: 10, padding: 12, gap: 6 },

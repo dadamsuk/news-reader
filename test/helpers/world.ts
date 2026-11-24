@@ -11,7 +11,7 @@ export const DIMS = 64;
 export const T0 = Date.UTC(2026, 10, 20, 12, 0, 0);
 export const HOUR = 3600_000;
 
-export type ChatPurpose = 'match' | 'digest' | 'story' | 'briefing' | 'compare';
+export type ChatPurpose = 'match' | 'digest' | 'story' | 'briefing' | 'compare' | 'enrich' | 'rescore' | 'profile';
 
 export interface Story {
   title: string;
@@ -55,6 +55,22 @@ export class World {
     if (purpose === 'match') return JSON.stringify({ match_id: 'c1', same_event: true, angle_note: 'Leads on the cost to taxpayers; quotes the opposition.' });
     if (purpose === 'story') return JSON.stringify({ summary: 'The new coverage reports a further development in the story.' });
     if (purpose === 'compare') return JSON.stringify({ agree: 'All report the same announcement.', differ: 'One leads on cost; another on the reaction.' });
+    if (purpose === 'enrich') {
+      const ids = Array.from(user.matchAll(/^ITEM (s\d+)$/gm)).map((m) => m[1]);
+      return JSON.stringify({ items: ids.map((id) => ({
+        id, headline: `Short headline for ${id}`, summary: `One-line summary of story ${id} and what changed.`,
+        why: 'Relevant to how your team ships code.', tags: ['coding agents'], type: 'release', profile_match: 0.7, impact: 0.5,
+        profile_lines: ['- Coding agents and tools'],
+      })) });
+    }
+    if (purpose === 'rescore') {
+      const ids = Array.from(user.matchAll(/^ID (r\d+)$/gm)).map((m) => m[1]);
+      return JSON.stringify({ items: ids.map((id) => ({ id, profile_match: 0.5, profile_lines: [] })) });
+    }
+    if (purpose === 'profile') {
+      const cur = /CURRENT PROFILE\n\n([\s\S]*?)\n\nPINNED LINES/.exec(user)?.[1] ?? '';
+      return JSON.stringify({ markdown: cur.replace('## Notes', '## Notes\n- Learned from recent signals.') });
+    }
     if (purpose === 'briefing') {
       const ids = Array.from(user.matchAll(/^STORY (s\d+)$/gm)).map((m) => m[1]);
       return JSON.stringify({ items: ids.map((id) => ({ id, sentence: `Outlets report story ${id}.` })) });
@@ -62,6 +78,8 @@ export class World {
     return JSON.stringify({ covered_by_primary: false, summary: 'Several outlets report a story the primary source has not run.' });
   };
   chatCost = 0.002;
+  /** Embedding for a text that no story registered (default: one shared by texts of equal length mod 30). */
+  fallbackVector: ((text: string) => number[]) | null = null;
   private salt = 0;
 
   private register(base: string, s: Story): Story {
@@ -132,14 +150,17 @@ export class World {
       const body = JSON.parse(init.body ?? '{}');
       const data = (body.input as string[]).map((text, index) => ({
         index,
-        embedding: this.vectors.get(text) ?? makeVector(31, 0.5, 900 + (text.length % 30)),
+        embedding: this.vectors.get(text) ?? this.fallbackVector?.(text) ?? makeVector(31, 0.5, 900 + (text.length % 30)),
       }));
       return reply(200, { data, usage: { prompt_tokens: 10 * data.length, total_tokens: 10 * data.length, cost: 0.00001 } });
     }
     if (url.includes('/chat/completions')) {
       const body = JSON.parse(init.body ?? '{}');
       const system: string = body.messages[0].content;
-      const purpose: ChatPurpose = system.includes('CANDIDATE') ? 'match'
+      const purpose: ChatPurpose = system.includes('ENRICHMENT') ? 'enrich'
+        : system.includes('RESCORE') ? 'rescore'
+          : system.includes('PROFILE REWRITE') ? 'profile'
+            : system.includes('CANDIDATE') ? 'match'
         : system.includes('FOLLOWED STORY') ? 'story'
           : system.includes('NEWS BRIEFING') ? 'briefing'
             : system.includes('COMPARE COVERAGE') ? 'compare' : 'digest';

@@ -1,6 +1,9 @@
 import { Image } from 'expo-image';
 import * as Network from 'expo-network';
+import { AppState } from 'react-native';
 import { ensureSession, noteBackground } from '../core/feed';
+import { listModes } from '../core/modes';
+import { unseenCounts } from '../core/sections';
 import { loadSettings, saveSettings, type Settings } from '../core/settings';
 import { errMsg } from '../core/util';
 import { monthSpend } from '../llm/openrouter';
@@ -61,8 +64,11 @@ export async function initApp(): Promise<void> {
     const db = await getDb();
     const { sessionId } = await ensureSession(db, Date.now());
     const settings = await loadSettings(db);
+    const modes = await listModes(db);
+    // The app opens on the last mode used (if it still exists).
+    if (!modes.some((m) => m.id === settings.currentModeId) && modes.length) settings.currentModeId = modes[0].id;
     setUpAtLaunch = settings.setupDone;
-    setState({ ready: true, initError: null, settings, sessionId, lastRefreshAt: settings.lastRefreshAt });
+    setState({ ready: true, initError: null, settings, sessionId, lastRefreshAt: settings.lastRefreshAt, modes });
     syncBudget(settings).catch(() => {});
   } catch (e) {
     setState({ initError: errMsg(e) });
@@ -76,6 +82,22 @@ export async function startSession(forceNew: boolean): Promise<void> {
   if (isNew || sessionId !== getState().sessionId) {
     setState({ sessionId, sessionVersion: getState().sessionVersion + 1 });
   }
+}
+
+/** Switches the mode on screen (Feed, Read later and History follow it) and remembers it. */
+export async function switchMode(modeId: number): Promise<void> {
+  if (getState().settings.currentModeId === modeId) return;
+  setState({ settings: { ...getState().settings, currentModeId: modeId } });
+  await updateSettings({ currentModeId: modeId });
+}
+
+/** Reloads the mode list (after a mode is added) and the mode bar's unseen counts. */
+export async function refreshModeCounts(): Promise<void> {
+  const db = await getDb();
+  const { settings, sessionId } = getState();
+  const modes = await listModes(db);
+  const modeCounts = await unseenCounts(db, modes, settings, sessionId, Date.now());
+  setState({ modes, modeCounts });
 }
 
 export async function appWentBackground(): Promise<void> {
@@ -124,6 +146,8 @@ export async function runRefresh(
     files,
     isWifi,
     shouldStop,
+    // Only with the app on screen: in the background a timer never fires (see platform/fetch.ts).
+    yieldUi: () => (AppState.currentState === 'active' ? new Promise((resolve) => setTimeout(resolve, 0)) : Promise.resolve()),
     prefetchThumbs: async (urls) => {
       if (urls.length) await Image.prefetch(urls, 'disk');
     },

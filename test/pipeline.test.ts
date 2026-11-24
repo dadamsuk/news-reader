@@ -213,8 +213,10 @@ describe('second source matching', () => {
     const call = s.world.chatCalls.find((c) => c.purpose === 'match')!;
     expect(call.user.indexOf('Daily Mail')).toBeLessThan(call.user.indexOf('BBC News'));
     expect(call.user).toContain('The chancellor set out tax rises.');
-    // No reading history or personal data in the prompt: only the public headline text.
-    expect(call.user).not.toMatch(/session|impression|history/i);
+    // Nothing secret leaves the phone (PRD: any app data may be sent, API keys never are). Every
+    // model request is checked for keys in test/ai-pipeline.test.ts.
+    expect(call.user).not.toContain('sk-or-test-key-123456');
+    expect(call.user).not.toContain('good-guardian-key');
     const dec = await s.db.all<any>("SELECT summary, detail FROM decision_log WHERE kind = 'match'");
     expect(dec[0].summary).toContain('Match');
     expect(JSON.parse(dec[0].detail).candidates[0]).toHaveProperty('similarity');

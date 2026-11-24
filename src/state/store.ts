@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { Mode } from '../core/modes';
 import { DEFAULT_SETTINGS, type Settings } from '../core/settings';
 
 /** When this JavaScript context started, for the launch-time figure in Debug. */
@@ -28,6 +29,10 @@ export interface AppState {
   snack: Snack | null;
   /** Milliseconds from JavaScript start to the cached feed being on screen. */
   feedReadyMs: number | null;
+  /** The modes, in mode-bar order. */
+  modes: Mode[];
+  /** Unseen cards per mode id, for the mode bar. */
+  modeCounts: Record<number, number>;
 }
 
 let state: AppState = {
@@ -44,6 +49,8 @@ let state: AppState = {
   monthSpend: 0,
   snack: null,
   feedReadyMs: null,
+  modes: [],
+  modeCounts: {},
 };
 
 const listeners = new Set<() => void>();

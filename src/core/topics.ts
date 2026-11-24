@@ -1,5 +1,5 @@
 import type { Db } from '../db/db';
-import type { TopicRule, TopicRuleKind } from './types';
+import { NEWS_MODE_ID, type TopicRule, type TopicRuleKind } from './types';
 
 /** What a rule is matched against: the headline, standfirst, section and keywords. */
 export interface TopicText {
@@ -69,7 +69,8 @@ function rowToRule(r: any): TopicRule {
 /** Rules in force at `now`, newest first. */
 export async function listRules(db: Db, now: number): Promise<TopicRule[]> {
   const rows = await db.all<any>(
-    'SELECT * FROM topic_rule WHERE expires_at IS NULL OR expires_at > ? ORDER BY created_at DESC, id DESC', [now],
+    'SELECT * FROM topic_rule WHERE mode_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC, id DESC',
+    [NEWS_MODE_ID, now],
   );
   return rows.map(rowToRule);
 }
@@ -86,7 +87,7 @@ export async function addRule(db: Db, kind: TopicRuleKind, term: string, expires
   const clean = term.trim().replace(/\s+/g, ' ');
   if (clean.length < 2) return null;
   return db.tx(async () => {
-    await db.run('DELETE FROM topic_rule WHERE lower(term) = lower(?)', [clean]);
+    await db.run('DELETE FROM topic_rule WHERE mode_id = ? AND lower(term) = lower(?)', [NEWS_MODE_ID, clean]);
     const r = await db.run('INSERT INTO topic_rule(kind, term, created_at, expires_at) VALUES(?,?,?,?)', [kind, clean, now, expiresAt]);
     return r.lastInsertRowId;
   });

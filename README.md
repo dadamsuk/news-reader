@@ -4,6 +4,14 @@ A personal news reader for Android and iOS, built with React Native and Expo (SD
 
 - Leads with one or more primary sources (the Guardian by default).
 - Never shows a story twice: once a card has been on screen it is gone, unless saved for later.
+  Or, with **Latest first** in Settings, the newest 100 stories in time order, which stay put.
+- Every card shows its **match**: how well it suits you compared with the other stories on offer.
+  Filtered (the default), For you is sorted by match and leaves out stories below a threshold set in
+  Settings; **Unfiltered** (a switch behind the Feed tab) shows everything in time or news order.
+- **Pulse**: the words in the latest headlines on one page. Size (and nearness to the middle) is how
+  much coverage a word gets, hue is the kind of story, strength of colour is how fresh it is, and a
+  triangle marks one that is rising. Headlines per hour underneath. Long-press a word to hide it
+  (UK and USA are hidden to start with).
 - Learns what gets read and ranks the feed accordingly.
 - Pairs primary stories with a second source from a different perspective, with a one-line note on how its angle differs.
 - A Right press tab lists stories the right-leaning press is running that the primary sources have not covered.
@@ -13,6 +21,12 @@ A personal news reader for Android and iOS, built with React Native and Expo (SD
 - Mute a topic for a while, or watch one so it always surfaces.
 - Shows what it has learned, preference by preference, and lets you correct it.
 - Every source, the Guardian included, is configurable data, not code.
+- **Modes**: separate feeds, each with its own sources, display and learning, switched from a bar
+  above the feed. **News** is everything above. **AI** follows AI from a software engineering and CTO
+  point of view: each story once, from blogs, vendor changelogs, Hacker News and split-up digests,
+  with a rewritten headline, a one-line summary and why it matters to you; "In other news..." keeps
+  significant stories your interests would filter out. It learns from what you read and rate, and
+  keeps an interest profile you can read and edit.
 
 Runs entirely on the phone. The only network calls are to the news sources and to OpenRouter.
 
@@ -21,6 +35,7 @@ Runs entirely on the phone. The only network calls are to the news sources and t
 | | |
 | --- | --- |
 | [docs/spec.md](docs/spec.md) | The build spec and acceptance criteria (snapshot of the live [News app spec](https://claude.ai/artifact/WUZ58V9cNht5iXyRuJCjZw)) |
+| [docs/News Reader PRD Modes and the AI mode.md](<docs/News Reader PRD Modes and the AI mode.md>) | The PRD for modes and the AI mode |
 | [docs/decisions.md](docs/decisions.md) | Every decision taken during the build, what was and was not verified, and what is left for you |
 | [docs/deploy.md](docs/deploy.md) | EAS build, submit and update; one-time account setup |
 | [docs/testing.md](docs/testing.md) | Jest tests, live checks and the Maestro end-to-end flows |

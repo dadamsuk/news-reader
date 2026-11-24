@@ -11,6 +11,8 @@
  *           GET /e2e/control?batch=2            publish the second batch of stories
  *           GET /e2e/control?reset=1            back to the start state
  *           GET /e2e/stats                      call counters, as JSON
+ *           GET /e2e/ai-sources.json            the AI mode's sources (vendor feed, blog, digest,
+ *                                               Hacker News, a news page), for newsreader://e2e?action=aimock
  */
 const http = require('http');
 const zlib = require('zlib');
@@ -92,6 +94,92 @@ const ANGLE = {
   'Daily Express': 'Gives equal weight to longer A&E delays and doctors\' caution.',
 };
 
+// ---------------------------------------------------------------- the AI mode's stories
+
+/**
+ * src: vendor (high priority RSS), blog (normal), lab (html_list page, high). hn: Hacker News points
+ * (the HN item links to the same URL, so it is coverage of the same story). digest: also in the digest
+ * issue. left: off-profile but significant (lands in In other news). t: topic (same topic, same story).
+ */
+const AI = [
+  { t: 101, m: 30, src: 'vendor', hn: 320, digest: true, title: 'Vendor makes its coding agent generally available', short: 'Coding agent now generally available', summary: 'The agent opens pull requests and fixes failing checks; pricing starts at $19 a seat.' },
+  { t: 101, m: 25, src: 'blog', title: 'Notes on the coding agent going GA', summary: 'A first look at the agent in a real repository.' },
+  { t: 102, m: 40, src: 'lab', title: 'Lab publishes study of AI pair programming at 40 companies', short: 'Study: AI pairing at 40 companies', summary: 'Teams merged 12% more pull requests, with more review time.' },
+  { t: 103, m: 50, src: 'vendor', left: true, hn: 650, title: 'Vendor announces a humanoid robot for warehouses', short: 'Humanoid robot for warehouses announced', summary: 'The robot lifts 20kg and ships next year.' },
+  { t: 104, m: 55, src: 'vendor', left: true, hn: 700, title: 'Vendor releases an image model for film studios', short: 'Image model for film studios released', summary: 'It renders 4K frames in under a second.' },
+  { t: 105, m: 60, src: 'vendor', left: true, hn: 610, digest: true, title: 'Vendor launches a consumer AI pendant', short: 'Consumer AI pendant launched', summary: 'The pendant records conversations and costs $99.' },
+  ...Array.from({ length: 16 }, (_, i) => ({
+    t: 110 + i, m: 70 + i * 5, src: i % 2 ? 'blog' : 'vendor',
+    title: `Engineering update ${i + 1}: agents in the build pipeline`, short: `Agents in the build pipeline, part ${i + 1}`,
+    summary: `Practical note number ${i + 1} on running coding agents in CI.`,
+  })),
+];
+const aiUrl = (base, s) => (s.src === 'lab' ? `${base}/ai/lab/news/${slug(s.title)}` : `${base}/ai/pages/${slug(s.title)}`);
+const aiFind = (title) => AI.find((s) => s.title === title || s.short === title);
+
+function aiRss(base, src) {
+  const items = AI.filter((s) => s.src === src).map((s) => `<item>
+<title><![CDATA[${s.title}]]></title>
+<link>${aiUrl(base, s)}?utm_source=rss</link>
+<description><![CDATA[${s.summary}]]></description>
+<pubDate>${when(s).toUTCString()}</pubDate>
+</item>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${src}</title>${items}</channel></rss>`;
+}
+
+function aiDigest(base) {
+  const lis = AI.filter((s) => s.digest).map((s) => `<li><p>${esc(s.summary)} (<a href="${aiUrl(base, s)}">${esc(s.title)}</a>, <a href="https://x.com/someone/status/${s.t}">thread</a>)</p></li>`).join('');
+  const html = `<h2>Top stories</h2><ul>${lis}<li><p>A smaller item about evals (<a href="${base}/ai/pages/eval-notes">Notes on evals for coding agents</a>)</p></li></ul>`;
+  return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Digest</title>
+<item><title>Digest issue 1</title><link>https://digest.example/issues/1</link><pubDate>${new Date(started - 20 * 60000).toUTCString()}</pubDate>
+<content:encoded><![CDATA[${html}]]></content:encoded></item></channel></rss>`;
+}
+
+function aiLabPage(base) {
+  const cards = AI.filter((s) => s.src === 'lab').map((s) => `<div class="card"><a href="/ai/lab/news/${slug(s.title)}"><h3>${esc(s.title)}</h3></a><time datetime="${when(s).toISOString()}">${when(s).toDateString()}</time></div>`).join('');
+  return `<!doctype html><html><body><nav><a href="/ai/lab/news/announcements">Announcements</a></nav>${cards}</body></html>`;
+}
+
+function aiSourcesJson(base) {
+  const src = (name, adapter, endpoint, priority, extra = {}) => ({
+    name, adapter, endpoint, role: 'primary', lean: 'centre', readerMode: 'extract', paywalled: false, includeSections: [], excludeSections: [],
+    refreshMinutes: 1, enabled: true, priority, isDigest: false, config: {}, ...extra,
+  });
+  return {
+    version: 1,
+    sources: [
+      src('Vendor blog', 'rss', `${base}/ai/feeds/vendor.xml`, 'high'),
+      src('Lab news', 'html_list', `${base}/ai/lab/news`, 'high', { config: { linkPattern: '^/ai/lab/news/[a-z0-9-]+$', minTitleWords: 4 } }),
+      src('Engineering blog', 'rss', `${base}/ai/feeds/blog.xml`, 'normal'),
+      src('The Digest', 'rss', `${base}/ai/feeds/digest.xml`, 'low', { isDigest: true }),
+      src('Hacker News', 'hn_api', `${base}/ai/hn/v0/topstories.json\n${base}/ai/hn/v0/beststories.json`, 'low', { config: { minPoints: 150, keywords: ['agent', 'AI', 'model', 'robot', 'pendant'] } }),
+    ],
+  };
+}
+
+function aiEnrich(user) {
+  const blocks = user.split(/\n\n(?=ITEM )/);
+  return {
+    items: blocks.map((b) => {
+      const id = (/^ITEM (s\d+)/.exec(b) || [])[1];
+      const title = (/Headline: (.*)/.exec(b) || [])[1] || '';
+      const s = aiFind(title);
+      const left = !!(s && s.left);
+      return {
+        id,
+        headline: s ? s.short : title.split(/\s+/).slice(0, 8).join(' '),
+        summary: s ? s.summary : 'A short note for engineers.',
+        why: left ? '' : 'Bears on how your teams ship code with agents.',
+        tags: left ? ['robotics'] : ['coding agents'],
+        type: 'release',
+        profile_match: left ? 0.05 : 0.85,
+        impact: left ? 1 : 0.3,
+        profile_lines: left ? [] : ['- Coding agents and tools'],
+      };
+    }),
+  };
+}
+
 // ---------------------------------------------------------------- state
 
 const started = Date.now();
@@ -130,7 +218,7 @@ function hash(s) {
 /** Same topic: cosine about 0.92. Different topics: about 0. */
 function vectorFor(text) {
   const title = text.split('\n')[0];
-  const story = allStories().find((s) => s.title === title);
+  const story = allStories().find((s) => s.title === title) || aiFind(title);
   const v = new Array(DIMS).fill(0);
   if (!story) {
     v[48 + (hash(title) % 16)] = 1;
@@ -266,6 +354,17 @@ function sourcesJson(base) {
 // ---------------------------------------------------------------- model replies
 
 function chatReply(system, user) {
+  if (system.includes('ENRICHMENT')) {
+    state.stats.enrich = (state.stats.enrich || 0) + 1;
+    return aiEnrich(user);
+  }
+  if (system.includes('RESCORE')) {
+    return { items: Array.from(user.matchAll(/^ID (r\d+)$/gm)).map((m) => ({ id: m[1], profile_match: 0.6, profile_lines: [] })) };
+  }
+  if (system.includes('PROFILE REWRITE')) {
+    const cur = (/CURRENT PROFILE\n\n([\s\S]*?)\n\nPINNED LINES/.exec(user) || [])[1] || '';
+    return { markdown: cur };
+  }
   if (system.includes('CANDIDATE')) {
     state.stats.match++;
     const stories = allStories();
@@ -306,6 +405,30 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     try {
       if (path === '/e2e/sources.json') return send(res, 200, sourcesJson(base));
+      if (path === '/e2e/ai-sources.json') return send(res, 200, aiSourcesJson(base));
+
+      // ---- the AI mode's sources
+      const aiFeed = /^\/ai\/feeds\/(vendor|blog|digest)\.xml$/.exec(path);
+      if (aiFeed) {
+        state.stats.feeds++;
+        const xml = aiFeed[1] === 'digest' ? aiDigest(base) : aiRss(base, aiFeed[1]);
+        return send(res, 200, xml, 'application/rss+xml; charset=utf-8');
+      }
+      if (path === '/ai/lab/news') return send(res, 200, aiLabPage(base), 'text/html; charset=utf-8');
+      const hnList = /^\/ai\/hn\/v0\/(topstories|beststories)\.json$/.exec(path);
+      if (hnList) return send(res, 200, hnList[1] === 'beststories' ? [] : AI.filter((s) => s.hn).map((s) => s.t));
+      const hnItem = /^\/ai\/hn\/v0\/item\/(\d+)\.json$/.exec(path);
+      if (hnItem) {
+        const s = AI.find((x) => x.t === Number(hnItem[1]) && x.hn);
+        if (!s) return send(res, 200, null);
+        return send(res, 200, { id: s.t, type: 'story', title: s.title, score: s.hn, descendants: 30, url: aiUrl(base, s), time: Math.floor(when(s).getTime() / 1000) });
+      }
+      const aiPage = /^\/ai\/(?:pages|lab\/news)\/([a-z0-9-]+)$/.exec(path);
+      if (aiPage) {
+        state.stats.pages++;
+        const s = AI.find((x) => slug(x.title) === aiPage[1]) || { title: 'Notes on evals for coding agents', summary: 'How to test agents.' };
+        return send(res, 200, page(base, 'AI source', s), 'text/html; charset=utf-8');
+      }
       if (path === '/e2e/stats') return send(res, 200, { ...state.stats, batch: state.batch, broken: [...state.broken] });
       if (path === '/e2e/control') {
         if (url.searchParams.get('reset')) reset();

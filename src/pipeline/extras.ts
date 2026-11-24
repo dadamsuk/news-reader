@@ -7,7 +7,7 @@ import { loadCoverage, saveCoverageNote, type CoverageNote } from '../core/cover
 import { saveSettings } from '../core/settings';
 import { attachToStories } from '../core/stories';
 import { loadTopicFilter } from '../core/topics';
-import { DAY, HOUR, type BriefingItem } from '../core/types';
+import { DAY, HOUR, NEWS_MODE_ID, type BriefingItem } from '../core/types';
 import { countWords, errMsg, mapLimit, safeJson } from '../core/util';
 import type { Db } from '../db/db';
 import { BudgetExceededError, chatJson, overBudget, type LlmDeps } from '../llm/openrouter';
@@ -129,11 +129,16 @@ Reply with only this JSON object, one entry per story, using the ids given:
  * Writes the catch-up briefing when one is due (the app came back after a long gap): the stories
  * most outlets ran while it was away, one sentence each. Muted topics are left out. Without the
  * model (no key, or the budget cap) each item shows a headline instead.
+ *
+ * `awaySince` is for a background refresh while the app is away: once the gap is long enough the
+ * briefing is written there and then, so it is already at the top of For you when the app opens.
+ * A later run (in the background again, or on opening) rewrites it only when the set of stories
+ * has changed; otherwise the one written earlier stands and no model call is made.
  */
-export async function stepBriefing(d: StepDeps): Promise<string> {
+export async function stepBriefing(d: StepDeps, awaySince = 0): Promise<string> {
   // Read afresh: a session that began during this run may have asked for one.
   const row = await d.db.get<{ value: string }>("SELECT value FROM setting WHERE key = 'briefingSince'");
-  const asked = Number(safeJson<number>(row?.value, 0)) || 0;
+  const asked = Number(safeJson<number>(row?.value, 0)) || awaySince;
   if (!asked) return 'not due';
   const now = d.now();
   if (!d.settings.briefingEnabled) {
@@ -145,9 +150,9 @@ export async function stepBriefing(d: StepDeps): Promise<string> {
     `SELECT a.id, a.cluster_id, a.source_id, a.title, a.summary, a.section, a.tags, a.published_at,
             src.name, src.role, src.paywalled
      FROM article a JOIN source src ON src.id = a.source_id AND src.enabled = 1
-     WHERE a.cluster_id IS NOT NULL AND a.published_at > ? AND a.published_at <= ?
+     WHERE a.mode_id = ? AND a.cluster_id IS NOT NULL AND a.published_at > ? AND a.published_at <= ?
      ORDER BY a.published_at DESC, a.id`,
-    [since, now + HOUR],
+    [NEWS_MODE_ID, since, now + HOUR],
   );
   const topics = await loadTopicFilter(d.db, now);
   const byCluster = new Map<number, any[]>();
@@ -170,6 +175,18 @@ export async function stepBriefing(d: StepDeps): Promise<string> {
   if (!stories.length) {
     await saveSettings(d.db, { briefingSince: 0 });
     return 'nothing widely covered while away';
+  }
+  // The same stories as the briefing already waiting (written in the background while away): keep it.
+  const last = await d.db.get<{ items: string }>(
+    'SELECT items FROM briefing WHERE dismissed_at IS NULL AND since_at = ? ORDER BY id DESC LIMIT 1', [since],
+  );
+  if (last) {
+    const had = safeJson<BriefingItem[]>(last.items, []).map((it) => it.clusterId).sort((a, b) => a - b);
+    const want = stories.map((s) => s.clusterId).sort((a, b) => a - b);
+    if (had.length === want.length && had.every((c, i) => c === want[i])) {
+      await saveSettings(d.db, { briefingSince: 0 });
+      return `unchanged: the ${want.length} stories already in the briefing`;
+    }
   }
   const items: BriefingItem[] = stories.map((s) => {
     // The piece to open: a primary source's, else one that reads in the app, else the newest.

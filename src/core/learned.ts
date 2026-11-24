@@ -1,7 +1,7 @@
 import type { Db } from '../db/db';
 import { BAND_LABEL, BASELINE_RATIO, loadStats, logRatio, scoreArticles } from './ranking';
 import { LEAN_ORDER } from './sources';
-import { DAY, type Lean } from './types';
+import { DAY, NEWS_MODE_ID, type Lean } from './types';
 import { decayFactor } from './util';
 
 export type LearnedKind = 'section' | 'tag' | 'byline' | 'source' | 'tone' | 'words';
@@ -113,8 +113,8 @@ export async function readingDiet(db: Db, now: number): Promise<ReadingDiet> {
   const rows = await db.all<{ section: string | null; name: string; lean: Lean; at: number }>(
     `SELECT a.section, s.name, s.lean, MIN(x.at) at
      FROM interaction x JOIN article a ON a.id = x.article_id JOIN source s ON s.id = a.source_id
-     WHERE x.kind = 'read' AND x.at > ? GROUP BY x.article_id`,
-    [now - 14 * DAY],
+     WHERE a.mode_id = ? AND x.kind = 'read' AND x.at > ? GROUP BY x.article_id`,
+    [NEWS_MODE_ID, now - 14 * DAY],
   );
   const tally = (label: (r: (typeof rows)[number]) => string): DietLine[] => {
     const m = new Map<string, DietLine>();

@@ -75,6 +75,7 @@ export default function RootLayout() {
           <Stack.Screen name="settings/sources" options={{ title: 'Sources' }} />
           <Stack.Screen name="settings/source/[id]" options={{ title: 'Source' }} />
           <Stack.Screen name="settings/ranking" options={{ title: 'Ranking and thresholds' }} />
+          <Stack.Screen name="settings/profile" options={{ title: 'Learning' }} />
           <Stack.Screen name="settings/debug" options={{ title: 'Debug' }} />
         </Stack>
         <Snackbar />

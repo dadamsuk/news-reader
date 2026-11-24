@@ -15,9 +15,9 @@ import type {
 import { ageLabel, errMsg } from '../../core/util';
 import { getDb } from '../../platform/db';
 import { openArticle } from '../../platform/open';
-import { bodyDeps, launchedIntoFeed, runRefresh, startSession } from '../../platform/runner';
+import { bodyDeps, launchedIntoFeed, refreshModeCounts, runRefresh, startSession, updateSettings } from '../../platform/runner';
 import { ensureBody } from '../../reader/body';
-import { APP_START, getState, setState, showSnack, useStore } from '../../state/store';
+import { APP_START, bumpData, getState, setState, showSnack, useStore } from '../../state/store';
 import { ArticleCard, type CardHandlers } from '../../ui/ArticleCard';
 import { BriefingCard } from '../../ui/BriefingCard';
 import { StoryCard } from '../../ui/StoryCard';
@@ -26,6 +26,8 @@ import { ListRow } from '../../ui/ListRow';
 import { Button, Empty } from '../../ui/kit';
 import { BudgetBanner, CardMenu, CategorySheet, LessBecauseSheet, topicLabels } from '../../ui/overlays';
 import { VIEWABILITY, auditReset, auditScroll, auditSetHeight, auditSetOrder, useSeenTracker, type SeenEntry } from '../../ui/seen';
+import { ModeBar } from '../../ui/ModeBar';
+import { SectionsFeed } from '../../ui/SectionsFeed';
 import { useTheme } from '../../ui/theme';
 
 const AUDIT = !!Constants.expoConfig?.extra?.e2e;
@@ -60,12 +62,16 @@ function bubbleNote(b: BubbleItem): string {
   return parts.join(' ');
 }
 
-export default function FeedScreen() {
+/** The News layout: For you, Not for you, Outside, Following and More..., unchanged. */
+function NewsFeed() {
   const t = useTheme();
   const sessionId = useStore((s) => s.sessionId);
   const sessionVersion = useStore((s) => s.sessionVersion);
   const dataVersion = useStore((s) => s.dataVersion);
   const refreshing = useStore((s) => s.refreshing);
+  const chronological = useStore((s) => s.settings.chronological);
+  const unfiltered = useStore((s) => s.settings.unfiltered);
+  const filterThreshold = useStore((s) => s.settings.filterThreshold);
   const navigation = useNavigation();
   const [tab, setTab] = useState<Tab>('foryou');
   // One category (an article's section) to show in For you and Outside; null shows them all.
@@ -492,15 +498,17 @@ export default function FeedScreen() {
             loaded && category && !refreshing ? (
               <Empty
                 title={`Nothing new in ${category}`}
-                body="Every story in this category has been on screen or read."
+                body={chronological ? 'No recent stories in this category.' : 'Every story in this category has been on screen or read.'}
                 action={<Button title="Show all categories" kind="secondary" onPress={() => pickCategory(null)} testID="empty-show-all" />}
               />
             ) : loaded && refreshing ? (
               <FetchingNews />
             ) : loaded ? (
               <Empty
-                title="You are all caught up"
-                body="Every story here has been on screen. Pull down to check for new ones, or look in History."
+                title={chronological ? 'No stories yet' : 'You are all caught up'}
+                body={chronological
+                  ? 'Nothing from your primary sources in the last four days. Pull down to check for new stories.'
+                  : 'Every story here has been on screen. Pull down to check for new ones, or look in History.'}
                 action={<Button title="Refresh" kind="secondary" onPress={onPull} testID="empty-refresh" />}
               />
             ) : undefined
@@ -630,9 +638,36 @@ export default function FeedScreen() {
         selected={category}
         onPick={pickCategory}
         onClose={() => setPickerOpen(false)}
+        unfiltered={unfiltered}
+        threshold={filterThreshold}
+        onUnfiltered={(v) => {
+          updateSettings({ unfiltered: v }).then(bumpData, () => showSnack('Could not save that setting'));
+        }}
       />
       <LessBecauseSheet card={lessCard} onClose={() => setLessCard(null)} onPick={lessFor} />
       <CardMenu card={menuCard} onClose={() => setMenuCard(null)} actions={menuActions} />
+    </View>
+  );
+}
+
+/**
+ * The Feed tab: the mode bar, then the current mode's feed in its own layout. Switching mode swaps
+ * the feed below; each mode keeps its own seen state, Read later and History.
+ */
+export default function FeedTab() {
+  const t = useTheme();
+  const modeId = useStore((s) => s.settings.currentModeId);
+  const modes = useStore((s) => s.modes);
+  const dataVersion = useStore((s) => s.dataVersion);
+  const sessionVersion = useStore((s) => s.sessionVersion);
+  useEffect(() => {
+    refreshModeCounts().catch(() => {});
+  }, [dataVersion, sessionVersion, modeId]);
+  const mode = modes.find((m) => m.id === modeId);
+  return (
+    <View style={{ flex: 1, backgroundColor: t.card }}>
+      <ModeBar />
+      {mode?.layout.type === 'sections' ? <SectionsFeed key={mode.id} modeId={mode.id} /> : <NewsFeed />}
     </View>
   );
 }

@@ -1,7 +1,8 @@
 import type { Db } from '../db/db';
 import { placeholders } from '../db/db';
+import { applySectionSignal } from './learning';
 import type { Settings } from './settings';
-import { DAY, HOUR, type InteractionKind } from './types';
+import { DAY, HOUR, NEWS_MODE_ID, type InteractionKind } from './types';
 import { blobToVec, cosine, decayFactor, safeJson, vecToBlob } from './util';
 
 export const SIGNAL_WEIGHTS: Partial<Record<InteractionKind, number>> = {
@@ -96,7 +97,7 @@ export type StatMap = Map<string, Stat>;
 /** All feature stats, decayed to `now`. */
 export async function loadStats(db: Db, now: number): Promise<StatMap> {
   const rows = await db.all<{ feature_key: string; positive_weight: number; negative_weight: number; updated_at: number }>(
-    'SELECT * FROM feature_stat',
+    'SELECT * FROM feature_stat WHERE mode_id = ?', [NEWS_MODE_ID],
   );
   const m: StatMap = new Map();
   for (const r of rows) {
@@ -133,7 +134,9 @@ export interface Centroids {
 }
 
 export async function loadCentroids(db: Db): Promise<Centroids> {
-  const rows = await db.all<{ key: string; vector: Uint8Array; weight: number }>('SELECT key, vector, weight FROM centroid');
+  const rows = await db.all<{ key: string; vector: Uint8Array; weight: number }>(
+    'SELECT key, vector, weight FROM centroid WHERE mode_id = ?', [NEWS_MODE_ID],
+  );
   const out: Centroids = { read: null, dismissed: null };
   for (const r of rows) {
     if (r.weight <= 0.01) continue;
@@ -173,6 +176,28 @@ export function coldFactor(settings: Settings, now: number): number {
 export function preferencePart(parts: { a: number; s: number }, settings: Settings, now: number): number {
   const cold = coldFactor(settings, now);
   return cold * (settings.weightA * (parts.a - BASELINE_RATIO) + settings.weightS * parts.s);
+}
+
+/**
+ * How well each story suits him compared with the others on offer: 5 for the least likely, 95 for
+ * the most, 50 for the typical story. Ranked on the learned part of the score alone (not freshness
+ * or coverage), and without the cold-start damping, which exists to keep early learning from
+ * running the feed, not to hide it from the reader. Relative by design: with little learned, the
+ * differences are small but the order is still worth showing. Ties share a value.
+ */
+export function relativeMatch(prefs: number[]): number[] {
+  const n = prefs.length;
+  if (n <= 1) return prefs.map(() => 50);
+  const order = prefs.map((p, i) => ({ p, i })).sort((a, b) => a.p - b.p);
+  const out = new Array<number>(n);
+  for (let k = 0; k < n;) {
+    let j = k;
+    while (j + 1 < n && order[j + 1].p === order[k].p) j++;
+    const rank = (k + j) / 2 / (n - 1);
+    for (let x = k; x <= j; x++) out[order[x].i] = Math.round(5 + 90 * rank);
+    k = j + 1;
+  }
+  return out;
 }
 
 /** How far above the typical available story preferences must lift an article to call it a good fit. */
@@ -235,6 +260,14 @@ async function bumpCentroid(db: Db, key: 'read' | 'dismissed', embedding: Float3
 export async function applySignal(
   db: Db, articleId: number, kind: InteractionKind, now: number, reverseOf?: number,
 ): Promise<void> {
+  // Each mode learns only from its own articles: a sections-layout mode has its own model.
+  const mode = await db.get<{ mode_id: number; layout: string }>(
+    'SELECT a.mode_id, m.layout FROM article a JOIN mode m ON m.id = a.mode_id WHERE a.id = ?', [articleId],
+  );
+  if (mode && mode.mode_id !== NEWS_MODE_ID) {
+    if (safeJson<{ type?: string }>(mode.layout, {}).type === 'sections') await applySectionSignal(db, articleId, kind, now, reverseOf);
+    return;
+  }
   const base = SIGNAL_WEIGHTS[kind];
   if (!base) return;
   const reverse = reverseOf != null;
@@ -290,9 +323,9 @@ export async function scoreArticles(db: Db, now: number): Promise<number> {
      FROM article a JOIN source s ON s.id = a.source_id AND s.enabled = 1
      LEFT JOIN cluster c ON c.id = a.cluster_id
      LEFT JOIN impression i ON i.article_id = a.id
-     WHERE i.article_id IS NULL AND a.published_at > ?
+     WHERE a.mode_id = ? AND i.article_id IS NULL AND a.published_at > ?
        AND (s.role = 'primary' OR (c.right_outlet_count >= 2 AND c.has_primary = 0))`,
-    [now - 5 * DAY],
+    [NEWS_MODE_ID, now - 5 * DAY],
   );
   await db.tx(async () => {
     for (const r of rows) {
@@ -381,9 +414,9 @@ export async function whyThis(db: Db, articleId: number, settings: Settings, now
   const s = interest(emb, cents);
   if (emb && s > 0) {
     const reads = await db.all<{ embedding: Uint8Array }>(
-      `SELECT a.embedding FROM article a WHERE a.embedding IS NOT NULL AND a.id != ? AND a.id IN
+      `SELECT a.embedding FROM article a WHERE a.mode_id = ? AND a.embedding IS NOT NULL AND a.id != ? AND a.id IN
          (SELECT article_id FROM interaction WHERE kind IN ('read','save','more') AND at > ?)`,
-      [articleId, now - 30 * DAY],
+      [NEWS_MODE_ID, articleId, now - 30 * DAY],
     );
     let similar = 0;
     for (const r of reads) {
@@ -411,14 +444,13 @@ export async function whyThis(db: Db, articleId: number, settings: Settings, now
     .slice(0, 3);
 }
 
+/** Reset learning for the News mode: its feature stats and interest centroids. Other modes keep theirs. */
 export async function resetLearning(db: Db, now: number): Promise<void> {
   await db.tx(async () => {
-    await db.run('DELETE FROM feature_stat');
-    await db.run('DELETE FROM centroid');
-    await db.run('UPDATE article SET score_a = ?, score_s = 0', [BASELINE_RATIO]);
-    await db.run(
-      "INSERT INTO setting(key, value) VALUES('learningStartedAt', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      [JSON.stringify(now)],
-    );
+    await db.run('DELETE FROM feature_stat WHERE mode_id = ?', [NEWS_MODE_ID]);
+    await db.run('DELETE FROM centroid WHERE mode_id = ?', [NEWS_MODE_ID]);
+    await db.run('UPDATE article SET score_a = ?, score_s = 0 WHERE mode_id = ?', [BASELINE_RATIO, NEWS_MODE_ID]);
+    // The cold start runs again from now (News's settings live in its mode row).
+    await db.run("UPDATE mode SET settings = json_set(settings, '$.learningStartedAt', ?) WHERE id = ?", [now, NEWS_MODE_ID]);
   });
 }

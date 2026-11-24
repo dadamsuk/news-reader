@@ -110,7 +110,7 @@ describe('exploration', () => {
     expect(ranked).toEqual(ranked.slice().sort((x, y) => x - y));
   });
 
-  test('3 of the first 20 cards in a real feed are exploration picks', async () => {
+  test('For you, filtered, is in match order with no exploration picks (the Outside tab does that job)', async () => {
     const s = await setup([]);
     for (let i = 0; i < 60; i++) {
       s.world.addGuardian([{ title: `Story ${i}`, topic: i % 30, section: ['Politics', 'World', 'Culture', 'Science'][i % 4], hoursAgo: 1 + i * 0.2 }]);
@@ -118,8 +118,9 @@ describe('exploration', () => {
     await s.run();
     const { sessionId } = await ensureSession(s.db, s.world.now);
     const feed = await loadFeed(s.db, await loadSettings(s.db), sessionId, s.world.now);
-    expect(feed.slice(0, 20).filter((c) => c.explore)).toHaveLength(3);
-    expect(feed.slice(20, 40).filter((c) => c.explore)).toHaveLength(3);
+    expect(feed.filter((c) => c.explore)).toHaveLength(0);
+    const matches = feed.map((c) => c.match!);
+    expect(matches).toEqual(matches.slice().sort((a, b) => b - a));
   });
 });
 

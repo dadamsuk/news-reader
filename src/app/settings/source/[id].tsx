@@ -5,12 +5,12 @@ import { testSource, type SourceTestResult } from '../../../core/sourceTest';
 import {
   adapterNeedsKey, createSource, deleteSource, duplicateSource, getSource, sourceHealth, updateSource,
 } from '../../../core/sources';
-import { ADAPTERS, LEANS, READER_MODES, ROLES, type Source, type SourceInput } from '../../../core/types';
+import { ADAPTERS, LEANS, NEWS_MODE_ID, PRIORITIES, READER_MODES, ROLES, type Source, type SourceInput } from '../../../core/types';
 import { ageLabel, errMsg } from '../../../core/util';
 import { getDb } from '../../../platform/db';
 import { appFetch } from '../../../platform/fetch';
 import { secrets } from '../../../platform/secrets';
-import { bumpData, showSnack } from '../../../state/store';
+import { bumpData, showSnack, useStore } from '../../../state/store';
 import { Button, Choice, Dot, Field, Group, SwitchRow } from '../../../ui/kit';
 import { healthColor, useTheme } from '../../../ui/theme';
 
@@ -24,11 +24,15 @@ const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 /** A form for every field of a source record, plus Test, Duplicate and Delete. */
 export default function SourceScreen() {
   const t = useTheme();
-  const { id: idParam } = useLocalSearchParams<{ id: string }>();
+  const { id: idParam, mode: modeParam } = useLocalSearchParams<{ id: string; mode?: string }>();
   const isNew = idParam === 'new';
   const id = isNew ? null : Number(idParam);
   const [original, setOriginal] = useState<Source | null>(null);
-  const [f, setF] = useState<SourceInput>(BLANK);
+  const [f, setF] = useState<SourceInput>(() => ({ ...BLANK, modeId: Number(modeParam) || NEWS_MODE_ID }));
+  const modeId = f.modeId ?? NEWS_MODE_ID;
+  // Sections-layout modes have no roles or leans (their sources are saved as primary, centre).
+  const sectionsLayout = useStore((s) => s.modes.find((m) => m.id === modeId)?.layout.type === 'sections');
+  const [options, setOptions] = useState('{}');
   const [include, setInclude] = useState('');
   const [exclude, setExclude] = useState('');
   const [minutes, setMinutes] = useState('30');
@@ -52,13 +56,23 @@ export default function SourceScreen() {
       setInclude(s.includeSections.join(', '));
       setExclude(s.excludeSections.join(', '));
       setMinutes(String(s.refreshMinutes));
+      setOptions(JSON.stringify(s.config, null, 2));
       setKeyStored(!!(s.apiKeyRef && (await secrets.get(s.apiKeyRef))));
     })().catch(() => {});
   }, [id]);
 
-  const current = (): SourceInput => ({
-    ...f, includeSections: list(include), excludeSections: list(exclude), refreshMinutes: Number(minutes) || 0,
-  });
+  const current = (): SourceInput => {
+    let config: Record<string, unknown> = {};
+    try {
+      config = options.trim() ? JSON.parse(options) : {};
+    } catch {
+      throw new Error('Options are not valid JSON');
+    }
+    return {
+      ...f, includeSections: list(include), excludeSections: list(exclude), refreshMinutes: Number(minutes) || 0, config,
+      ...(sectionsLayout ? { role: 'primary' as const, lean: 'centre' as const } : {}),
+    };
+  };
 
   const save = async (): Promise<number | null> => {
     setBusy('save');
@@ -99,7 +113,14 @@ export default function SourceScreen() {
     try {
       const typed = apiKey.trim();
       const stored = original?.apiKeyRef ? await secrets.get(original.apiKeyRef) : null;
-      setResult(await testSource(appFetch, { ...current() }, typed || stored, Date.now()));
+      let input: SourceInput;
+      try {
+        input = current();
+      } catch (e) {
+        setResult({ ok: false, items: [], total: 0, error: errMsg(e) });
+        return;
+      }
+      setResult(await testSource(appFetch, input, typed || stored, Date.now()));
       setNow(Date.now());
     } finally {
       setBusy(null);
@@ -164,7 +185,10 @@ export default function SourceScreen() {
           keyboardType={f.adapter === 'google_news_search' ? 'default' : 'url'}
           hint={
             f.adapter === 'google_news_search' ? 'A Google News search, for example site:thetimes.com'
-              : f.adapter === 'rss' ? 'One feed URL per line.' : 'The Content API search URL. Query and section parameters may be added.'
+              : f.adapter === 'rss' ? 'One feed URL per line.'
+                : f.adapter === 'hn_api' ? 'Hacker News story lists (topstories.json, beststories.json), one per line.'
+                  : f.adapter === 'html_list' ? 'The page listing the articles, one URL per line.'
+                    : 'The Content API search URL. Query and section parameters may be added.'
           }
           style={{ minHeight: 64, textAlignVertical: 'top' }}
         />
@@ -179,13 +203,43 @@ export default function SourceScreen() {
             hint="Held in the phone's secure storage, never in the database or an export."
           />
         ) : null}
-        <Choice testID="source-role" label="Role" options={ROLES} value={f.role} onChange={(role) => setF({ ...f, role })} />
-        <Choice testID="source-lean" label="Lean" options={LEANS} value={f.lean} onChange={(lean) => setF({ ...f, lean })} />
+        {sectionsLayout ? (
+          <>
+            <Choice testID="source-priority" label="Priority" options={PRIORITIES} value={f.priority ?? 'normal'} onChange={(priority) => setF({ ...f, priority })} />
+            <Text style={{ color: t.faint, fontSize: 12, marginHorizontal: 16, marginTop: 6, lineHeight: 17 }}>
+              Which source leads a story covered by several: original sources (high) beat commentary (normal), which beats digests (low).
+            </Text>
+          </>
+        ) : (
+          <>
+            <Choice testID="source-role" label="Role" options={ROLES} value={f.role} onChange={(role) => setF({ ...f, role })} />
+            <Choice testID="source-lean" label="Lean" options={LEANS} value={f.lean} onChange={(lean) => setF({ ...f, lean })} />
+          </>
+        )}
         <Choice testID="source-reader" label="Reader mode" options={READER_MODES} value={f.readerMode} onChange={(readerMode) => setF({ ...f, readerMode })} />
         <Group style={{ marginTop: 16 }}>
           <SwitchRow testID="source-paywalled" title="Paywalled" subtitle="Paywalled sources open in the in-app browser, never the reader's extractor" value={f.paywalled} onChange={(paywalled) => setF({ ...f, paywalled })} />
           <SwitchRow testID="source-enabled" title="Enabled" subtitle="Off sources are kept but not fetched" value={f.enabled} onChange={(enabled) => setF({ ...f, enabled })} />
+          {sectionsLayout ? (
+            <SwitchRow testID="source-digest" title="Digest" subtitle="Each issue links to many stories: split it into one item per story" value={!!f.isDigest} onChange={(isDigest) => setF({ ...f, isDigest })} />
+          ) : null}
         </Group>
+        {sectionsLayout || f.adapter === 'hn_api' || f.adapter === 'html_list' ? (
+          <Field
+            testID="source-options"
+            label="Options (JSON)"
+            value={options}
+            onChangeText={setOptions}
+            multiline
+            autoCapitalize="none"
+            hint={f.adapter === 'hn_api'
+              ? 'minPoints (default 150), keywords (a list; empty lets everything through), limit (stories read from each list).'
+              : f.adapter === 'html_list'
+                ? 'linkPattern (a regular expression for article paths), minTitleWords. Title, link and date are read from the page.'
+                : f.isDigest ? 'maxPerIssue: the most stories taken from one issue.' : 'Adapter options, if any.'}
+            style={{ minHeight: 64, textAlignVertical: 'top', fontFamily: 'monospace' }}
+          />
+        ) : null}
         <Field testID="source-include" label="Include sections" value={include} onChangeText={setInclude} hint="Comma separated. Empty means everything. Matches section, category or URL path." />
         <Field testID="source-exclude" label="Exclude sections" value={exclude} onChangeText={setExclude} hint="Comma separated." />
         <Field testID="source-minutes" label="Refresh minutes" value={minutes} onChangeText={setMinutes} keyboardType="number-pad" hint="Minimum gap between fetches of this source." />

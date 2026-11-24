@@ -28,7 +28,8 @@ export default function TabsLayout() {
     >
       {/* Tapping Feed while it is showing opens the category list (see the feed screen). */}
       <Tabs.Screen name="index" options={{ title: 'Feed', tabBarIcon: icon('newspaper-outline'), tabBarButtonTestID: 'tab-feed' }} />
-      <Tabs.Screen name="later" options={{ title: 'Read later', tabBarIcon: icon('bookmark-outline'), tabBarButtonTestID: 'tab-later' }} />
+      <Tabs.Screen name="pulse" options={{ title: 'Pulse', tabBarIcon: icon('pulse-outline'), tabBarButtonTestID: 'tab-pulse' }} />
+      <Tabs.Screen name="later"options={{ title: 'Read later', tabBarIcon: icon('bookmark-outline'), tabBarButtonTestID: 'tab-later' }} />
       <Tabs.Screen name="history" options={{ title: 'History', tabBarIcon: icon('time-outline'), tabBarButtonTestID: 'tab-history' }} />
       <Tabs.Screen name="settings" options={{ title: 'Settings', tabBarIcon: icon('settings-outline'), tabBarButtonTestID: 'tab-settings' }} />
     </Tabs>

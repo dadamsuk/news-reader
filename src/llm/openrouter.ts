@@ -1,5 +1,5 @@
 import type { Settings } from '../core/settings';
-import type { FetchFn } from '../core/types';
+import { NEWS_MODE_ID, type FetchFn } from '../core/types';
 import { errMsg, monthStart, normalize, safeJson } from '../core/util';
 import type { Db } from '../db/db';
 
@@ -9,6 +9,8 @@ export interface LlmDeps {
   settings: Settings;
   apiKey: string | null;
   now: () => number;
+  /** The mode the spend is recorded against (News when left out). One budget covers every mode. */
+  modeId?: number;
 }
 
 export class BudgetExceededError extends Error {
@@ -20,6 +22,14 @@ export class BudgetExceededError extends Error {
 export async function monthSpend(db: Db, now: number): Promise<number> {
   const row = await db.get<{ total: number | null }>('SELECT SUM(cost_usd) total FROM llm_usage WHERE at >= ?', [monthStart(now)]);
   return row?.total ?? 0;
+}
+
+/** This month's spend per mode id. */
+export async function monthSpendByMode(db: Db, now: number): Promise<Map<number, number>> {
+  const rows = await db.all<{ mode_id: number; total: number }>(
+    'SELECT mode_id, SUM(cost_usd) total FROM llm_usage WHERE at >= ? GROUP BY mode_id', [monthStart(now)],
+  );
+  return new Map(rows.map((r) => [r.mode_id, r.total]));
 }
 
 /** True when chat (Haiku) calls must stop until the 1st of next month. */
@@ -35,8 +45,8 @@ async function recordUsage(
   const reported = typeof usage?.cost === 'number' && usage.cost > 0 ? usage.cost : null;
   const cost = reported ?? (input * priceIn + output * priceOut) / 1_000_000;
   await d.db.run(
-    'INSERT INTO llm_usage(at, model, purpose, input_tokens, output_tokens, cost_usd) VALUES(?,?,?,?,?,?)',
-    [d.now(), model, purpose, input, output, cost],
+    'INSERT INTO llm_usage(at, model, purpose, input_tokens, output_tokens, cost_usd, mode_id) VALUES(?,?,?,?,?,?,?)',
+    [d.now(), model, purpose, input, output, cost, d.modeId ?? NEWS_MODE_ID],
   );
 }
 

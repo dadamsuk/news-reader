@@ -8,6 +8,8 @@ A native mobile news reader for one person, built once in React Native with Expo
 
 Every source, the Guardian included, is a configurable record: its type, address, key, role and lean are settings, not code.
 
+The app has **modes**: separate reading feeds, each with its own sources, display and learning. **News** is everything this spec describes. **AI** is a filtered feed for keeping up with AI from a software engineering and CTO point of view, specified in [News Reader PRD: Modes and the AI mode](News%20Reader%20PRD%20Modes%20and%20the%20AI%20mode.md). Where this spec says "the feed", "sources" or "learning" without naming a mode, it means the News mode. See Modes below.
+
 ### Goals
 
 - Every story appears on screen at most once, unless he saves it for later.
@@ -15,7 +17,7 @@ Every source, the Guardian included, is a configurable record: its type, address
 - A primary story gets a second source from another outlet when one exists, with a one-line note on how its angle differs.
 - A "Right press" tab lists stories two or more right-leaning outlets are running that no primary source has covered.
 - Ranking improves from what he opens, finishes, saves and ignores.
-- LLM spend stays around $5 a month, with a hard cap that degrades gracefully.
+- LLM spend stays around $5 to $6 a month for News and $4 to $8 for the AI mode, under one monthly hard cap ($15 by default) that degrades gracefully.
 - One codebase builds for Android and iOS, shipped through his own Google Play and Apple developer accounts.
 
 ### Non-goals for v1
@@ -50,10 +52,10 @@ React Native with Expo, in TypeScript. It gives one codebase for both phones, ov
 
 ### Refresh pipeline
 
-Each refresh runs these steps in order. A failed step is logged and skipped. It never blocks the steps after it.
+Each refresh runs these steps in order for the News mode, then each other mode's own steps in turn (see Modes), then retention, all under one refresh lock. A failed step is logged and skipped. It never blocks the steps after it.
 
 1. Fetch every enabled source through its adapter (see News sources), from its last successful fetch onwards.
-2. Normalise to `article` rows and de-duplicate on canonical URL (strip query strings and tracking parameters).
+2. Normalise to `article` rows and de-duplicate on canonical URL (strip query strings and tracking parameters) within the mode: the same URL can be stored once in each mode.
 3. Embed each new article's headline plus summary through OpenRouter, in batches.
 4. Cluster: attach each new article to an existing cluster from the last 72 hours if cosine similarity to the cluster centroid is at least 0.82. Otherwise start a new cluster.
 5. Second sources: for the primary articles most likely to be shown, find and confirm a second source (see Second source matching).
@@ -76,7 +78,7 @@ Every source, including the Guardian, is a row in the `source` table that he edi
 | Field | Values | Purpose |
 | --- | --- | --- |
 | name | text | Shown on cards and in the reader |
-| adapter | `guardian_content_api`, `rss`, `google_news_search` | How the app fetches it |
+| adapter | `guardian_content_api`, `rss`, `google_news_search`, `hn_api`, `html_list` | How the app fetches it |
 | endpoint | URL, or a search query for `google_news_search` | Where it fetches from |
 | api_key | optional, held in secure storage | For adapters that need one |
 | role | `primary`, `perspective` | Primary sources make up the For you feed. Perspective sources supply second sources and the Right press digest |
@@ -86,6 +88,8 @@ Every source, including the Guardian, is a row in the `source` table that he edi
 | include_sections, exclude_sections | lists | Filters by section, category or URL path |
 | refresh_minutes | number, default 30 | Minimum gap between fetches of this source |
 | enabled | yes or no | Off sources are kept but not fetched |
+| mode | a mode | Each source belongs to exactly one mode; the same feed can be a source in two modes |
+| priority, is_digest, config | high, normal, low; yes or no; JSON | Sections-layout modes: which source leads a story covered by several, whether issues are split into stories, and adapter options (for example the Hacker News points threshold). Role and lean are News-only; such sources are saved as primary, centre |
 
 Rules: any number of sources can be primary; at least one must be enabled. Changing a source's role takes effect at the next refresh. Settings can export all sources as JSON and import them again, with keys left out of the export.
 
@@ -237,7 +241,7 @@ In every 20 feed slots, 3 go to unseen articles from sections he rarely opens, c
 
 ### Why am I seeing this
 
-The long-press menu shows the three largest score contributions (for example "Section: Politics", "Similar to 6 stories you read", "Covered by 5 outlets"). Settings has Reset learning.
+The long-press menu shows the three largest score contributions (for example "Section: Politics", "Similar to 6 stories you read", "Covered by 5 outlets"). Settings has Reset learning, which resets the mode picked in Settings, Learning, and no other.
 
 ## LLM use and cost
 
@@ -254,9 +258,9 @@ Haiku 4.5 is listed on OpenRouter at [$1 per million input tokens and $5 per mil
 ### Rules for every call
 
 - Temperature 0, JSON output validated against a schema. One retry on invalid JSON, then skip and log.
-- Only public headlines, summaries and article text are sent. No reading history or personal data leaves the phone.
+- Nothing secret leaves the phone: API keys and other secrets are never sent to the model. Any data from inside the app may be (headlines, article text, and for the AI mode reading history, signals and the interest profile). Signals, profiles and item state are stored only on the phone. No third-party analytics.
 - Cost is recorded per call from the usage figures in each response, into `llm_usage`.
-- Monthly budget in Settings, default $10. At the cap, LLM steps stop until the 1st of the next month: the feed still works on embeddings alone, second-source strips show the best match above 0.85 without an angle note, and the digest shows headlines instead of summaries. A banner says so.
+- One monthly budget in Settings covers every mode, default $15; spend is recorded per mode and Settings shows it in total and per mode. At the cap, in News, LLM steps stop until the 1st of the next month: the feed still works on embeddings alone, second-source strips show the best match above 0.85 without an angle note, and the digest shows headlines instead of summaries; in the AI mode new cards show their source's headline and are summarised when the month turns. Both modes still load. A banner says so.
 
 ## Data model, screens and settings
 
@@ -264,8 +268,9 @@ Haiku 4.5 is listed on OpenRouter at [$1 per million input tokens and $5 per mil
 
 | Table | Key columns |
 | --- | --- |
-| `source` | id, name, adapter, endpoint, api_key_ref (secure-store key name), role, lean, reader_mode, paywalled, include_sections, exclude_sections, refresh_minutes, enabled, last_ok_at, last_error |
-| `article` | id, source_id, canonical_url (unique), title, summary, image_url, published_at, section, tags (JSON), tone, byline, word_count, embedding, cluster_id, body_html, fetched_at |
+| `mode` | id, name, icon, sort_order, layout (JSON), settings (JSON), created_at |
+| `source` | id, mode_id, name, adapter, endpoint, api_key_ref (secure-store key name), role, lean, reader_mode, paywalled, include_sections, exclude_sections, refresh_minutes, enabled, priority, is_digest, config (JSON), last_ok_at, last_error |
+| `article` | id, mode_id, source_id, canonical_url (unique per mode), title, summary, image_url, published_at, section, tags (JSON), tone, byline, word_count, embedding, cluster_id, body_html, fetched_at |
 | `cluster` | id, created_at, centroid, has_primary, right_outlet_count, digest_summary |
 | `impression` | article_id (unique), first_seen_at, session_id, surface (feed, second_source, digest) |
 | `interaction` | id, article_id, kind (open, read, save, unsave, dismiss, more, less), at, dwell_seconds, max_scroll_pct |
@@ -273,18 +278,20 @@ Haiku 4.5 is listed on OpenRouter at [$1 per million input tokens and $5 per mil
 | `read_later` | article_id, saved_at, done_at |
 | `feature_stat` | feature_key, positive_weight, negative_weight, updated_at |
 | `llm_usage` | id, at, model, purpose, input_tokens, output_tokens, cost_usd |
-| `setting` | key, value (JSON) for all other settings |
+| `setting` | key, value (JSON) for the settings shared by every mode. The News mode's own settings (ranking weights and thresholds, cold-start date, Latest first, Unfiltered, filter threshold, Pulse hidden words) live in its `mode.settings` |
+
+`cluster`, `feature_stat`, `centroid`, `topic_rule`, `story`, `briefing` and `llm_usage` also carry `mode_id`. Tables keyed by article (`impression`, `interaction`, `read_later`, `second_source`, `match_pair`, `article_summary`) need none: an article belongs to one mode, so seen, Read later and History are per mode. The AI mode's own tables and columns are in the PRD's Data model.
 
 ### Screens
 
-1. **Feed**, with tabs: For you (primary sources), Right, Outside, Following and More... (every headline from the other sources, newest first, with no ranking or filtering). Pull to refresh. Last-refreshed time in a line under the tabs. Tapping the Feed button while the feed is showing lists the categories; picking one shows only that category's cards in For you and Outside.
+1. **Feed**: a mode bar (one chip per mode, with its unseen count) above the mode's own feed. The app opens on the last mode used. For News, tabs: For you (primary sources), Right, Outside, Following and More... (every headline from the other sources, newest first, with no ranking or filtering). Pull to refresh. Last-refreshed time in a line under the tabs. Tapping the Feed button while the feed is showing lists the categories; picking one shows only that category's cards in For you and Outside.
 2. **Reader** (see Feed section).
-3. **Read later**.
-4. **History**, with search.
-5. **Settings**: OpenRouter key; Sources (list with health dots, then a form per source for every field in the source record, plus Test, Add, Duplicate, Delete, and JSON import and export); second-source preference; model IDs; monthly budget and spend so far; refresh interval; Wi-Fi-only prefetch; text size; ranking weights and thresholds; Reset learning; Export database (shares the SQLite file); Debug.
+3. **Read later**, for the current mode.
+4. **History**, with search, for the current mode.
+5. **Settings**: OpenRouter key; Sources (list with health dots, then a form per source for every field in the source record, plus Test, Add, Duplicate, Delete, and JSON import and export); second-source preference; model IDs; monthly budget and spend so far; refresh interval; Wi-Fi-only prefetch; text size; ranking weights and thresholds; Reset learning; Export database (shares the SQLite file); Debug. The Sources and Learning tabs have a mode picker at the top and show that mode's sources and learning; General, AI and budget, and Data are shared.
 6. **Debug**: last 20 refresh runs with per-step timing and errors; recent clusters with member articles and similarity scores; recent match and digest decisions with the LLM's JSON.
 
-Bottom tabs: Feed, Read later, History, Settings. There is no title bar. Settings is split into tabs: General, Sources, AI and budget, Learning, Data. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
+Bottom tabs: Feed, Pulse, Read later, History, Settings. Feed, Read later and History show the current mode; Pulse covers News only. There is no title bar. Settings is split into tabs: General, Sources, AI and budget, Learning, Data. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
 
 ## Acceptance criteria
 
@@ -342,9 +349,19 @@ The build is done when every item below passes on a real Android phone and on an
 
 - [ ] After 30 More like this taps on one section, articles from that section move up the feed, and Why am I seeing this names it.
 - [ ] 3 of every 20 feed slots are exploration items. (test)
-- [ ] Reset learning returns ranking to cold-start behaviour.
+- [ ] Reset learning returns ranking to cold-start behaviour, for the mode picked only.
 - [ ] Settings shows this month's LLM spend from `llm_usage`. Setting the budget to $0.01 stops LLM calls and shows the banner, and the feed still loads. (test)
 - [ ] No API key appears in logs, the app bundle, a sources export or an exported database.
+
+## Modes
+
+The full design is the PRD, [Modes and the AI mode](News%20Reader%20PRD%20Modes%20and%20the%20AI%20mode.md); the build's decisions are in [decisions.md](decisions.md) section 15. In brief:
+
+- A mode is data: a row in `mode` with its name, icon, order, layout and settings, plus its own sources, item state and learning. Nothing in one mode changes another: signals, seen state, Read later, History and Reset learning are per mode. A further mode needs no code: a mode definition, sources using existing adapters, a layout and a starter profile.
+- Two layouts. The **News layout** is this spec, unchanged, and is used by the News mode only. The **sections layout** is one scroll of section types; the AI mode shows "Stuff you're interested in" (ranked by relevance, 15 at a time) then "In other news..." (3 to 5 significant stories the profile would filter out, hidden when none qualify).
+- Shared: the refresh run and its lock, the background task, adapters, the LLM client, the one monthly budget, 14-day retention, the reader and its Summary sheet, and the General, AI and budget, and Data settings.
+- Adapters gain `hn_api` (Hacker News, with a points threshold and keyword prefilter) and `html_list` (titles, links and dates from a page with no feed). Digest sources are split into one item per linked story.
+- The AI mode learns through per-tag and per-source weights (exponential moving averages of signals) and a readable interest profile the model rewrites weekly or every 50 signals, keeping the lines he pinned word for word.
 
 ## Decisions taken and open risks
 
@@ -360,7 +377,7 @@ The build is done when every item below passes on a real Android phone and on an
 | History screen added | A safety net for stories scrolled past by accident, given the strict seen rule |
 | Second source picks the lean furthest from the primary | The point is a different perspective; with the defaults that means right-leaning outlets first |
 | Paywalled articles open in the in-app browser | Uses the platform's browser session for subscriptions, with no login code in the app |
-| No server | He reads on his phone only; refresh on open plus background tasks is enough |
+| No server | He reads on his phone only; refresh on open plus background tasks is enough. The sections pipeline is a self-contained module so it could move to a server later |
 | Play internal testing on Android, TestFlight on iOS | Uses his existing developer accounts; updates install like any store app, with no public listing |
 
 ### Risks

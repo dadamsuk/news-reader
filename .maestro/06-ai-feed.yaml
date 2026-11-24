@@ -1,0 +1,105 @@
+# The AI mode against the mock server: its sources (a vendor feed, a news page, a blog, a digest and
+# Hacker News) refresh into the two sections; one story from four sources is one card with "+3 more";
+# rewritten headline, one-line summary and "why it matters"; In other news after the main section,
+# with a reason label; Show more; the long-press menu with Why am I seeing this; save with undo; a
+# swipe left with its "because" sheet; and Read later showing only the AI mode's items.
+appId: net.dsc.newsreader
+---
+- runFlow: common/setup.yaml
+- openLink: "newsreader://e2e?action=aimock&host=10.0.2.2:8787"
+- extendedWaitUntil:
+    visible:
+      id: "mode-ai"
+    timeout: 30000
+- tapOn:
+    id: "mode-ai"
+- extendedWaitUntil:
+    visible:
+      id: "sections-list"
+    timeout: 15000
+# Pull to refresh fetches the AI sources and processes them.
+- swipe:
+    start: 50%, 40%
+    end: 50%, 85%
+    duration: 500
+- extendedWaitUntil:
+    visible: "Stuff you're interested in"
+    timeout: 90000
+- extendedWaitUntil:
+    visible: "Coding agent now generally available"
+    timeout: 30000
+- assertVisible: "The agent opens pull requests and fixes failing checks; pricing starts at \\$19 a seat."
+- assertVisible: "Why it matters: Bears on how your teams ship code with agents."
+- assertVisible: "\\+3 more"
+- tapOn: "\\+3 more"
+- assertVisible: "Engineering blog  Notes on the coding agent going GA"
+- assertVisible: "Hacker News  .*"
+
+# Long press: More like this, Less like this, Why am I seeing this, Share link.
+- longPressOn: "Coding agent now generally available"
+- assertVisible:
+    id: "card-menu"
+- tapOn:
+    id: "menu-why"
+- extendedWaitUntil:
+    visible:
+      id: "why-box"
+    timeout: 5000
+- assertVisible: ".*Your profile: \"Coding agents and tools\".*"
+- tapOn:
+    id: "menu-more"
+- assertVisible: "You will see more like this"
+
+# Save for later, with undo, then save again.
+- tapOn:
+    id: "save-.*"
+    index: 0
+- assertVisible: "Saved to Read later"
+- tapOn:
+    id: "snackbar-action"
+- tapOn:
+    id: "save-.*"
+    index: 0
+
+# Swipe left asks what to see less of: this source, or these topics. Cancel keeps the card.
+- swipe:
+    from: "Coding agent now generally available"
+    direction: LEFT
+- assertVisible:
+    id: "less-sheet"
+- assertVisible: "Less from this source"
+- assertVisible: "Less on these topics"
+- tapOn:
+    id: "less-cancel"
+
+# Fifteen cards, then Show more; In other news comes after the main section, with its reason labels.
+- scrollUntilVisible:
+    element:
+      id: "show-more"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "show-more"
+- scrollUntilVisible:
+    element: "In other news..."
+    direction: DOWN
+    timeout: 30000
+- scrollUntilVisible:
+    element: "Humanoid robot for warehouses announced"
+    direction: DOWN
+    timeout: 15000
+- assertVisible: "Trending on HN"
+
+# Read later lists the AI mode's items only.
+- tapOn:
+    id: "tab-later"
+- assertVisible: "Vendor makes its coding agent generally available"
+- tapOn:
+    id: "tab-feed"
+- tapOn:
+    id: "mode-news"
+- tapOn:
+    id: "tab-later"
+- assertNotVisible: "Vendor makes its coding agent generally available"
+- tapOn:
+    id: "tab-feed"

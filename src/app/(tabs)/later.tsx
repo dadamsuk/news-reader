@@ -11,18 +11,20 @@ import { useTheme } from '../../ui/theme';
 export default function ReadLaterScreen() {
   const t = useTheme();
   const dataVersion = useStore((s) => s.dataVersion);
+  // Read later lists the current mode's items only.
+  const modeId = useStore((s) => s.settings.currentModeId);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     getDb()
-      .then((db) => loadReadLater(db))
+      .then((db) => loadReadLater(db, modeId))
       .then((r) => {
         setRows(r);
         setNow(Date.now());
       })
       .catch(() => setRows([]));
-  }, [dataVersion]);
+  }, [dataVersion, modeId]);
 
   const onPress = useCallback((row: Row) => {
     openArticle(row.article.id, 'feed').catch(() => showSnack('Could not open the article'));

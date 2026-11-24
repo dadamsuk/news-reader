@@ -6,7 +6,8 @@ import { saveSettings } from '../core/settings';
 import { importSources, listSources, updateSource } from '../core/sources';
 import { getDb } from '../platform/db';
 import { appFetch } from '../platform/fetch';
-import { reloadSettings, startSession } from '../platform/runner';
+import { refreshModeCounts, reloadSettings, startSession } from '../platform/runner';
+import { AI_MODE_ID, NEWS_MODE_ID } from '../core/types';
 import { secrets } from '../platform/secrets';
 import { bumpData } from '../state/store';
 
@@ -17,6 +18,9 @@ const E2E = !!Constants.expoConfig?.extra?.e2e;
  *   newsreader://e2e?action=mock&host=10.0.2.2:8787   point sources and OpenRouter at the mock server
  *   newsreader://e2e?action=background&minutes=11     pretend the app spent that long in the background
  *   newsreader://e2e?action=guardianrss               read the Guardian via public RSS (no API key needed)
+ *   newsreader://e2e?action=aimock&host=10.0.2.2:8787 give the AI mode the mock server's AI sources
+ *
+ * `mock` switches off every other mode's sources, so the News flows see the app exactly as before modes.
  */
 export default function E2EScreen() {
   const params = useLocalSearchParams<{ action?: string; host?: string; minutes?: string }>();
@@ -32,7 +36,15 @@ export default function E2EScreen() {
         if (!res.ok) throw new Error(`mock server answered ${res.status}`);
         await importSources(db, secrets, await res.text());
         await saveSettings(db, { openrouterBaseUrl: `${base}/openrouter/api/v1`, wifiOnlyPrefetch: false });
+        await db.run('UPDATE source SET enabled = 0 WHERE mode_id != ?', [NEWS_MODE_ID]);
         await reloadSettings();
+        bumpData();
+      } else if (params.action === 'aimock' && params.host) {
+        const base = `http://${params.host}`;
+        const res = await appFetch(`${base}/e2e/ai-sources.json`);
+        if (!res.ok) throw new Error(`mock server answered ${res.status}`);
+        await importSources(db, secrets, await res.text(), AI_MODE_ID);
+        await refreshModeCounts();
         bumpData();
       } else if (params.action === 'guardianrss') {
         // Live testing without a Guardian API key: read the Guardian through its public RSS feeds.

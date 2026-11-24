@@ -1,6 +1,6 @@
 import type { Db } from '../db/db';
 import { ARTICLE_COLS, rowToArticle, type ListRow } from './feed';
-import { HOUR, type StoryView } from './types';
+import { HOUR, NEWS_MODE_ID, type StoryView } from './types';
 import { blobToVec, dot, normalize } from './util';
 
 /** New articles are matched to followed stories while they are this recent (the embedding window). */
@@ -22,8 +22,8 @@ export async function attachToStories(db: Db, followThreshold: number, now: numb
   if (!stories.length) return 0;
   const arts = await db.all<{ id: number; embedding: Uint8Array; cluster_id: number | null }>(
     `SELECT a.id, a.embedding, a.cluster_id FROM article a JOIN source s ON s.id = a.source_id AND s.enabled = 1
-     WHERE a.embedding IS NOT NULL AND a.published_at > ?`,
-    [now - STORY_SCAN_MS],
+     WHERE a.mode_id = ? AND a.embedding IS NOT NULL AND a.published_at > ?`,
+    [NEWS_MODE_ID, now - STORY_SCAN_MS],
   );
   const vecs = arts.map((a) => blobToVec(a.embedding));
   let added = 0;

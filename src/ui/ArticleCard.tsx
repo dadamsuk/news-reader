@@ -36,6 +36,45 @@ function SwipeAction({ t, kind }: { t: Theme; kind: 'hide' | 'less' }) {
   );
 }
 
+/** Mixes two #rrggbb colours: 0 gives `from`, 1 gives `to`. */
+export function mix(from: string, to: string, k: number): string {
+  const p = (c: string, i: number) => parseInt(c.slice(1 + 2 * i, 3 + 2 * i), 16);
+  const x = Math.max(0, Math.min(1, k));
+  return '#' + [0, 1, 2].map((i) => Math.round(p(from, i) + (p(to, i) - p(from, i)) * x).toString(16).padStart(2, '0')).join('');
+}
+
+/** Near-black or white, whichever reads better on the colour (by relative luminance). */
+function inkOn(bg: string): string {
+  const lin = (i: number) => {
+    const c = parseInt(bg.slice(1 + 2 * i, 3 + 2 * i), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const l = 0.2126 * lin(0) + 0.7152 * lin(1) + 0.0722 * lin(2);
+  // Contrast with white is 1.05 / (l + 0.05); with near-black about (l + 0.05) / 0.059.
+  return 1.05 / (l + 0.05) >= (l + 0.05) / 0.059 ? '#FFFFFF' : '#16161A';
+}
+
+/**
+ * Unfiltered feed: how likely the story is to suit him. The pill fills with the accent colour as
+ * the chance rises; below an even chance it is an outline only.
+ */
+function MatchPill({ t, id, match }: { t: Theme; id: number; match: number }) {
+  const strong = match >= 50;
+  const fill = strong ? mix(t.strip, t.accent, (match - 50) / 50) : 'transparent';
+  const ink = strong ? inkOn(fill) : t.faint;
+  return (
+    <View
+      testID={`match-${id}`}
+      accessible
+      accessibilityLabel={`Match ${match} percent, compared with the other stories on offer`}
+      style={[styles.match, { backgroundColor: fill, borderColor: strong ? fill : t.border }]}
+    >
+      <Ionicons name="heart" size={10} color={ink} />
+      <Text style={[styles.matchText, { color: ink }]}>{match}%</Text>
+    </View>
+  );
+}
+
 function ArticleCardBase({ card, now, handlers, note, onNote, showFit = true, noteIcon = 'eye-off-outline' }: {
   card: FeedCard; now: number; handlers: CardHandlers;
   /** A strip under the card (e.g. which outlets carry the story). */
@@ -76,7 +115,9 @@ function ArticleCardBase({ card, now, handlers, note, onNote, showFit = true, no
             style={styles.main}
           >
             <View style={styles.metaRow}>
-              {showFit ? (
+              {card.match != null ? (
+                <MatchPill t={t} id={a.id} match={card.match} />
+              ) : showFit ? (
                 <View
                   testID={`fit-${a.id}`}
                   accessible
@@ -139,7 +180,8 @@ function ArticleCardBase({ card, now, handlers, note, onNote, showFit = true, no
               </Pressable>
             </View>
             <View style={styles.bodyRow}>
-              <Text style={[styles.title, { color: t.text }]} numberOfLines={5}>{a.title}</Text>
+              {/* Latest first keeps cards already read: their headline is dimmed. */}
+              <Text style={[styles.title, { color: card.opened ? t.muted : t.text }]} numberOfLines={5}>{a.title}</Text>
               {a.imageUrl ? (
                 <Image
                   source={{ uri: a.imageUrl }}
@@ -216,6 +258,8 @@ const styles = StyleSheet.create({
   age: { fontSize: 12, marginLeft: 8 },
   metaButton: { marginRight: 18 },
   // Filled: here because it fits. Hollow: here because it is recent (or an exploration pick).
+  match: { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1, borderRadius: 9, paddingHorizontal: 6, paddingVertical: 1, marginRight: 8 },
+  matchText: { fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] },
   fitDot: { width: 7, height: 7, borderRadius: 4, borderWidth: 1.2, marginRight: 7, opacity: 0.85 },
   bodyRow: { flexDirection: 'row', gap: 12 },
   title: { flex: 1, fontSize: 18, lineHeight: 23, fontWeight: '700', fontFamily: 'serif' },

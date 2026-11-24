@@ -1,7 +1,7 @@
 import type { Db } from '../db/db';
 import {
-  ADAPTERS, LEANS, READER_MODES, ROLES,
-  type Lean, type ReaderMode, type Source, type SourceInput,
+  ADAPTERS, LEANS, NEWS_MODE_ID, PRIORITIES, READER_MODES, ROLES,
+  type Lean, type Priority, type ReaderMode, type Source, type SourceInput,
 } from './types';
 import { safeJson } from './util';
 
@@ -111,11 +111,16 @@ function rowToSource(r: any): Source {
     lastError: r.last_error ?? null,
     lastFetchAt: r.last_fetch_at ?? null,
     lastNewAt: r.last_new_at ?? null,
+    modeId: r.mode_id ?? NEWS_MODE_ID,
+    priority: (r.priority ?? 'normal') as Priority,
+    isDigest: !!r.is_digest,
+    config: safeJson<Record<string, unknown>>(r.config, {}),
   };
 }
 
-export async function listSources(db: Db): Promise<Source[]> {
-  return (await db.all('SELECT * FROM source ORDER BY (role = \'primary\') DESC, id')).map(rowToSource);
+/** One mode's sources (News unless another mode is named). */
+export async function listSources(db: Db, modeId: number = NEWS_MODE_ID): Promise<Source[]> {
+  return (await db.all('SELECT * FROM source WHERE mode_id = ? ORDER BY (role = \'primary\') DESC, id', [modeId])).map(rowToSource);
 }
 
 export async function getSource(db: Db, id: number): Promise<Source | null> {
@@ -142,6 +147,8 @@ export function validateSource(s: SourceInput): string[] {
   if (!LEANS.includes(s.lean)) errs.push('Unknown lean');
   if (!READER_MODES.includes(s.readerMode)) errs.push('Unknown reader mode');
   if (!(s.refreshMinutes >= 1)) errs.push('Refresh minutes must be 1 or more');
+  if (s.priority != null && !PRIORITIES.includes(s.priority)) errs.push('Unknown priority');
+  if (s.config != null && (typeof s.config !== 'object' || Array.isArray(s.config))) errs.push('Options must be a JSON object');
   return errs;
 }
 
@@ -163,19 +170,22 @@ export async function insertSource(db: Db, s: SourceInput): Promise<number> {
   const ref = adapterNeedsKey(s.adapter) ? s.apiKeyRef || newKeyRef() : s.apiKeyRef;
   const r = await db.run(
     `INSERT INTO source(name, adapter, endpoint, api_key_ref, role, lean, reader_mode, paywalled,
-       include_sections, exclude_sections, refresh_minutes, enabled)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+       include_sections, exclude_sections, refresh_minutes, enabled, mode_id, priority, is_digest, config)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [s.name.trim(), s.adapter, s.endpoint.trim(), ref ?? null, s.role, s.lean, s.readerMode, s.paywalled ? 1 : 0,
       JSON.stringify(s.includeSections ?? []), JSON.stringify(s.excludeSections ?? []),
-      Math.round(s.refreshMinutes), s.enabled ? 1 : 0],
+      Math.round(s.refreshMinutes), s.enabled ? 1 : 0, s.modeId ?? NEWS_MODE_ID, s.priority ?? 'normal',
+      s.isDigest ? 1 : 0, JSON.stringify(s.config ?? {})],
   );
   return r.lastInsertRowId;
 }
 
 export class SourceRuleError extends Error {}
 
-async function assertPrimaryRule(db: Db): Promise<void> {
-  const row = await db.get<{ n: number }>("SELECT COUNT(*) n FROM source WHERE role = 'primary' AND enabled = 1");
+/** News needs an enabled primary source (it makes For you). Other modes have no roles. */
+async function assertPrimaryRule(db: Db, modeId: number = NEWS_MODE_ID): Promise<void> {
+  if (modeId !== NEWS_MODE_ID) return;
+  const row = await db.get<{ n: number }>("SELECT COUNT(*) n FROM source WHERE role = 'primary' AND enabled = 1 AND mode_id = ?", [modeId]);
   if (!row || row.n < 1) throw new SourceRuleError('At least one primary source must be enabled.');
 }
 
@@ -187,16 +197,18 @@ export async function updateSource(db: Db, id: number, s: SourceInput): Promise<
     if (!before) throw new SourceRuleError('Source not found');
     const ref = adapterNeedsKey(s.adapter) ? before.apiKeyRef || s.apiKeyRef || newKeyRef() : before.apiKeyRef;
     const endpointChanged = before.endpoint.trim() !== s.endpoint.trim() || before.adapter !== s.adapter;
+    // A source stays in its mode; the mode fields keep their values unless given.
     await db.run(
       `UPDATE source SET name=?, adapter=?, endpoint=?, api_key_ref=?, role=?, lean=?, reader_mode=?, paywalled=?,
-         include_sections=?, exclude_sections=?, refresh_minutes=?, enabled=?
+         include_sections=?, exclude_sections=?, refresh_minutes=?, enabled=?, priority=?, is_digest=?, config=?
          ${endpointChanged ? ', last_fetch_at=NULL, last_ok_at=NULL, last_error=NULL' : ''}
        WHERE id=?`,
       [s.name.trim(), s.adapter, s.endpoint.trim(), ref ?? null, s.role, s.lean, s.readerMode, s.paywalled ? 1 : 0,
         JSON.stringify(s.includeSections ?? []), JSON.stringify(s.excludeSections ?? []),
-        Math.round(s.refreshMinutes), s.enabled ? 1 : 0, id],
+        Math.round(s.refreshMinutes), s.enabled ? 1 : 0, s.priority ?? before.priority, (s.isDigest ?? before.isDigest) ? 1 : 0,
+        JSON.stringify(s.config ?? before.config), id],
     );
-    await assertPrimaryRule(db);
+    await assertPrimaryRule(db, before.modeId);
   });
 }
 
@@ -218,16 +230,18 @@ export async function deleteSource(db: Db, secrets: Secrets, id: number): Promis
   if (!s) return;
   await db.tx(async () => {
     await db.run('DELETE FROM source WHERE id = ?', [id]);
-    await assertPrimaryRule(db);
+    await assertPrimaryRule(db, s.modeId);
     await db.run('DELETE FROM second_source WHERE other_article_id IN (SELECT id FROM article WHERE source_id = ?)', [id]);
     await db.run('DELETE FROM second_source WHERE primary_article_id IN (SELECT id FROM article WHERE source_id = ?)', [id]);
+    await db.run('DELETE FROM article_mention WHERE source_id = ? OR article_id IN (SELECT id FROM article WHERE source_id = ?)', [id, id]);
     await db.run('DELETE FROM article WHERE source_id = ?', [id]);
   });
   if (s.apiKeyRef) await secrets.remove(s.apiKeyRef).catch(() => {});
 }
 
+/** First run: the News mode's default sources. (The AI mode's are seeded by seedModes.) */
 export async function seedDefaultSources(db: Db): Promise<void> {
-  const row = await db.get<{ n: number }>('SELECT COUNT(*) n FROM source');
+  const row = await db.get<{ n: number }>('SELECT COUNT(*) n FROM source WHERE mode_id = ?', [NEWS_MODE_ID]);
   if (row && row.n > 0) return;
   await db.tx(async () => {
     for (const s of DEFAULT_SOURCES) await insertSource(db, s);
@@ -238,22 +252,24 @@ export async function seedDefaultSources(db: Db): Promise<void> {
 
 export interface SourcesExport {
   version: 1;
-  sources: Omit<SourceInput, 'apiKeyRef'>[];
+  sources: Omit<SourceInput, 'apiKeyRef' | 'modeId'>[];
 }
 
-export async function exportSources(db: Db): Promise<SourcesExport> {
-  const all = await listSources(db);
+/** One mode's sources as JSON. Keys are never part of it. */
+export async function exportSources(db: Db, modeId: number = NEWS_MODE_ID): Promise<SourcesExport> {
+  const all = await listSources(db, modeId);
   return {
     version: 1,
     sources: all.map((s) => ({
       name: s.name, adapter: s.adapter, endpoint: s.endpoint, role: s.role, lean: s.lean,
       readerMode: s.readerMode, paywalled: s.paywalled, includeSections: s.includeSections,
       excludeSections: s.excludeSections, refreshMinutes: s.refreshMinutes, enabled: s.enabled,
+      priority: s.priority, isDigest: s.isDigest, config: s.config,
     })),
   };
 }
 
-export function parseSourcesExport(json: string): SourceInput[] {
+export function parseSourcesExport(json: string, modeId: number = NEWS_MODE_ID): SourceInput[] {
   let data: any;
   try {
     data = JSON.parse(json);
@@ -276,12 +292,16 @@ export function parseSourcesExport(json: string): SourceInput[] {
       excludeSections: Array.isArray(raw?.excludeSections) ? raw.excludeSections.map(String) : [],
       refreshMinutes: Number(raw?.refreshMinutes ?? 30),
       enabled: raw?.enabled !== false,
+      modeId,
+      priority: raw?.priority ?? 'normal',
+      isDigest: !!raw?.isDigest,
+      config: raw?.config && typeof raw.config === 'object' ? raw.config : {},
     };
     const errs = validateSource(s);
     if (errs.length) throw new SourceRuleError(`Source ${i + 1} (${s.name || 'unnamed'}): ${errs.join('. ')}`);
     return s;
   });
-  if (!out.some((s) => s.role === 'primary' && s.enabled)) {
+  if (modeId === NEWS_MODE_ID && !out.some((s) => s.role === 'primary' && s.enabled)) {
     throw new SourceRuleError('The import must contain at least one enabled primary source.');
   }
   return out;
@@ -291,9 +311,9 @@ export function parseSourcesExport(json: string): SourceInput[] {
  * Replaces the sources table with the imported list. A source that matches an existing one by
  * name and adapter keeps its id (so its articles and stored key survive); the rest are removed.
  */
-export async function importSources(db: Db, secrets: Secrets, json: string): Promise<number> {
-  const incoming = parseSourcesExport(json);
-  const existing = await listSources(db);
+export async function importSources(db: Db, secrets: Secrets, json: string, modeId: number = NEWS_MODE_ID): Promise<number> {
+  const incoming = parseSourcesExport(json, modeId);
+  const existing = await listSources(db, modeId);
   const removedRefs: string[] = [];
   await db.tx(async () => {
     const used = new Set<number>();
@@ -304,10 +324,11 @@ export async function importSources(db: Db, secrets: Secrets, json: string): Pro
         const endpointChanged = match.endpoint.trim() !== s.endpoint.trim();
         await db.run(
           `UPDATE source SET endpoint=?, role=?, lean=?, reader_mode=?, paywalled=?, include_sections=?,
-             exclude_sections=?, refresh_minutes=?, enabled=?
+             exclude_sections=?, refresh_minutes=?, enabled=?, priority=?, is_digest=?, config=?
              ${endpointChanged ? ', last_fetch_at=NULL, last_ok_at=NULL, last_error=NULL' : ''} WHERE id=?`,
           [s.endpoint.trim(), s.role, s.lean, s.readerMode, s.paywalled ? 1 : 0, JSON.stringify(s.includeSections),
-            JSON.stringify(s.excludeSections), Math.round(s.refreshMinutes), s.enabled ? 1 : 0, match.id],
+            JSON.stringify(s.excludeSections), Math.round(s.refreshMinutes), s.enabled ? 1 : 0,
+            s.priority ?? 'normal', s.isDigest ? 1 : 0, JSON.stringify(s.config ?? {}), match.id],
         );
       } else {
         await insertSource(db, s);
@@ -317,6 +338,7 @@ export async function importSources(db: Db, secrets: Secrets, json: string): Pro
       if (used.has(e.id)) continue;
       await db.run('DELETE FROM second_source WHERE other_article_id IN (SELECT id FROM article WHERE source_id = ?)', [e.id]);
       await db.run('DELETE FROM second_source WHERE primary_article_id IN (SELECT id FROM article WHERE source_id = ?)', [e.id]);
+      await db.run('DELETE FROM article_mention WHERE source_id = ? OR article_id IN (SELECT id FROM article WHERE source_id = ?)', [e.id, e.id]);
       await db.run('DELETE FROM article WHERE source_id = ?', [e.id]);
       await db.run('DELETE FROM source WHERE id = ?', [e.id]);
       if (e.apiKeyRef) removedRefs.push(e.apiKeyRef);

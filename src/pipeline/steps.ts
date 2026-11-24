@@ -2,7 +2,7 @@ import { fetchSource } from '../adapters';
 import { finalScore } from '../core/ranking';
 import type { Settings } from '../core/settings';
 import { LEAN_ORDER, listSources, type Secrets } from '../core/sources';
-import { DAY, HOUR, type FetchFn, type Lean, type RawItem, type Source } from '../core/types';
+import { DAY, HOUR, NEWS_MODE_ID, type FetchFn, type Lean, type RawItem, type Source } from '../core/types';
 import {
   blobToVec, canonicalUrl, countWords, dot, errMsg, mapLimit, normalize, safeJson, stripHtml, truncateWords, vecToBlob,
 } from '../core/util';
@@ -24,7 +24,7 @@ const CLUSTER_WINDOW = 72 * HOUR;
 
 // ---------------------------------------------------------------- 1 + 2: fetch, normalise, de-duplicate
 
-export async function insertItems(db: Db, source: Pick<Source, 'id'>, items: RawItem[], now: number): Promise<number> {
+export async function insertItems(db: Db, source: Pick<Source, 'id'> & Partial<Pick<Source, 'modeId'>>, items: RawItem[], now: number): Promise<number> {
   let added = 0;
   const seenTitles = new Set<string>();
   await db.tx(async () => {
@@ -36,11 +36,11 @@ export async function insertItems(db: Db, source: Pick<Source, 'id'>, items: Raw
       if (seenTitles.has(tkey)) continue;
       seenTitles.add(tkey);
       const r = await db.run(
-        `INSERT OR IGNORE INTO article(source_id, canonical_url, url, external_id, title, summary, image_url, published_at,
+        `INSERT OR IGNORE INTO article(mode_id, source_id, canonical_url, url, external_id, title, summary, image_url, published_at,
            section, tags, tone, byline, word_count, adapter_body, fetched_at)
-         SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+         SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
          WHERE NOT EXISTS (SELECT 1 FROM article WHERE source_id = ? AND title = ? AND published_at > ?)`,
-        [source.id, canonical, it.url, it.externalId ?? null, title, (it.summary ?? '').trim(), it.imageUrl ?? null,
+        [source.modeId ?? NEWS_MODE_ID, source.id, canonical, it.url, it.externalId ?? null, title, (it.summary ?? '').trim(), it.imageUrl ?? null,
           it.publishedAt ?? now, it.section ?? null, JSON.stringify(it.tags ?? []), it.tone ?? null,
           it.byline ?? null, it.wordCount ?? null, it.adapterBody ?? null, now,
           source.id, title, now - 7 * DAY],
@@ -54,9 +54,20 @@ export async function insertItems(db: Db, source: Pick<Source, 'id'>, items: Raw
 /** Sources fetched at once. */
 export const FETCH_CONCURRENCY = 16;
 
-export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: string; added: number; failed: string[]; fetched: number }> {
+/** How a mode other than News stores what its sources return, and from when it wants items. */
+export interface FetchOptions {
+  modeId: number;
+  /** Stores a source's items; returns how many were new. */
+  insert?: (source: Source, items: RawItem[], now: number) => Promise<number>;
+  /** The earliest publication time wanted from a source. */
+  since?: (source: Source, now: number) => number;
+}
+
+export async function stepFetch(
+  d: StepDeps, force: boolean, opts: FetchOptions = { modeId: NEWS_MODE_ID },
+): Promise<{ info: string; added: number; failed: string[]; fetched: number }> {
   const now = d.now();
-  const sources = (await listSources(d.db)).filter((s) => s.enabled);
+  const sources = (await listSources(d.db, opts.modeId)).filter((s) => s.enabled);
   // A pull-to-refresh fetches every source again, but not more than once every ten seconds.
   const minGap = force ? 10_000 : 0;
   const due = sources.filter((s) => {
@@ -98,13 +109,15 @@ export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: st
     };
     try {
       key = s.apiKeyRef ? await d.secrets.get(s.apiKeyRef) : null;
-      const since = Math.max(now - CLUSTER_WINDOW, s.lastOkAt ? s.lastOkAt - OVERLAP : now - FIRST_LOOKBACK);
+      const since = opts.since
+        ? opts.since(s, now)
+        : Math.max(now - CLUSTER_WINDOW, s.lastOkAt ? s.lastOkAt - OVERLAP : now - FIRST_LOOKBACK);
       const t1 = Date.now();
       const { items, partialError } = await fetchSource(s, { fetch: timedFetch, apiKey: key, since, now });
       time.read = Math.max(0, Date.now() - t1 - time.net);
       time.items = items.length;
       const t2 = Date.now();
-      const n = await insertItems(d.db, s, items, now);
+      const n = opts.insert ? await opts.insert(s, items, now) : await insertItems(d.db, s, items, now);
       time.store = Date.now() - t2;
       added += n;
       if (partialError) failed.push(s.name);
@@ -134,17 +147,20 @@ export async function stepFetch(d: StepDeps, force: boolean): Promise<{ info: st
 
 // ---------------------------------------------------------------- 3: embed
 
-export async function stepEmbed(d: StepDeps): Promise<string> {
-  const rows = await d.db.all<{ id: number; title: string; summary: string }>(
-    'SELECT id, title, summary FROM article WHERE embedding IS NULL AND published_at > ? ORDER BY published_at DESC LIMIT 1500',
-    [d.now() - CLUSTER_WINDOW - 12 * HOUR],
+export async function stepEmbed(
+  d: StepDeps, modeId: number = NEWS_MODE_ID, windowMs = CLUSTER_WINDOW + 12 * HOUR,
+  text: (r: { title: string; summary: string; digest_context: string | null }) => string = (r) => (r.summary ? `${r.title}\n${r.summary}` : r.title),
+): Promise<string> {
+  const rows = await d.db.all<{ id: number; title: string; summary: string; digest_context: string | null }>(
+    'SELECT id, title, summary, digest_context FROM article WHERE mode_id = ? AND embedding IS NULL AND published_at > ? ORDER BY published_at DESC LIMIT 1500',
+    [modeId, d.now() - windowMs],
   );
   if (!rows.length) return 'nothing to embed';
   if (!d.llm.apiKey) throw new Error('No OpenRouter key set');
   let done = 0;
   for (let i = 0; i < rows.length; i += 96) {
     const batch = rows.slice(i, i + 96);
-    const vecs = await embedTexts(d.llm, batch.map((r) => (r.summary ? `${r.title}\n${r.summary}` : r.title)));
+    const vecs = await embedTexts(d.llm, batch.map(text));
     await d.db.tx(async () => {
       for (let j = 0; j < batch.length; j++) {
         await d.db.run('UPDATE article SET embedding = ? WHERE id = ?', [vecToBlob(vecs[j]), batch[j].id]);
@@ -170,8 +186,8 @@ export async function stepCluster(d: StepDeps): Promise<string> {
   const now = d.now();
   const threshold = d.settings.clusterThreshold;
   const crows = await d.db.all<{ id: number; centroid: Uint8Array; size: number }>(
-    'SELECT id, centroid, size FROM cluster WHERE created_at > ? AND centroid IS NOT NULL',
-    [now - CLUSTER_WINDOW],
+    'SELECT id, centroid, size FROM cluster WHERE mode_id = ? AND created_at > ? AND centroid IS NOT NULL',
+    [NEWS_MODE_ID, now - CLUSTER_WINDOW],
   );
   const clusters: MemCluster[] = [];
   for (const c of crows) {
@@ -182,7 +198,8 @@ export async function stepCluster(d: StepDeps): Promise<string> {
     clusters.push({ id: c.id, sum, unit: normalize(mean), size: c.size, dirty: false });
   }
   const arts = await d.db.all<{ id: number; embedding: Uint8Array; published_at: number }>(
-    'SELECT id, embedding, published_at FROM article WHERE cluster_id IS NULL AND embedding IS NOT NULL ORDER BY published_at ASC',
+    'SELECT id, embedding, published_at FROM article WHERE mode_id = ? AND cluster_id IS NULL AND embedding IS NOT NULL ORDER BY published_at ASC',
+    [NEWS_MODE_ID],
   );
   let joined = 0;
   let created = 0;
@@ -241,8 +258,8 @@ export async function refreshClusterStats(db: Db, now: number): Promise<void> {
        right_outlet_count = (SELECT COUNT(DISTINCT a.source_id) FROM article a JOIN source s ON s.id = a.source_id
                              WHERE a.cluster_id = cluster.id AND s.role = 'perspective' AND s.enabled = 1
                                AND s.lean IN ('right','centre-right') AND a.published_at > ?)
-     WHERE created_at > ?`,
-    [now - 36 * HOUR, now - 5 * DAY],
+     WHERE created_at > ? AND mode_id = ?`,
+    [now - 36 * HOUR, now - 5 * DAY, NEWS_MODE_ID],
   );
 }
 
@@ -341,7 +358,7 @@ export async function stepSecondSources(d: StepDeps, hooks: SecondSourceHooks = 
   const prim = await d.db.all<any>(
     `SELECT a.id, a.title, a.summary, a.embedding, a.published_at, a.fetched_at, a.score_a, a.score_s, a.score_i,
             src.lean, src.name source_name, ss.other_article_id ss_other, ss.method ss_method, (ss.primary_article_id IS NOT NULL) has_row
-     FROM article a JOIN source src ON src.id = a.source_id AND src.role = 'primary' AND src.enabled = 1
+     FROM article a JOIN source src ON src.id = a.source_id AND src.role = 'primary' AND src.enabled = 1 AND src.mode_id = ${NEWS_MODE_ID}
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN second_source ss ON ss.primary_article_id = a.id
      WHERE i.article_id IS NULL AND a.embedding IS NOT NULL AND a.published_at > ?`,
@@ -360,7 +377,7 @@ export async function stepSecondSources(d: StepDeps, hooks: SecondSourceHooks = 
 
   const pers = await d.db.all<any>(
     `SELECT a.id, a.source_id, a.title, a.summary, a.embedding, a.published_at, a.body_html, src.name, src.lean, src.paywalled
-     FROM article a JOIN source src ON src.id = a.source_id AND src.role = 'perspective' AND src.enabled = 1
+     FROM article a JOIN source src ON src.id = a.source_id AND src.role = 'perspective' AND src.enabled = 1 AND src.mode_id = ${NEWS_MODE_ID}
      LEFT JOIN impression i ON i.article_id = a.id
      WHERE i.article_id IS NULL AND a.embedding IS NOT NULL AND a.published_at > ? AND a.published_at < ?`,
     [Math.min(...top.map((p) => p.published_at)) - 48 * HOUR, Math.max(...top.map((p) => p.published_at)) + 48 * HOUR],
@@ -516,7 +533,7 @@ export async function stepDigest(d: StepDeps): Promise<string> {
   const clusters = await d.db.all<any>(
     `SELECT id, centroid, right_outlet_count, last_article_at, digest_status, digest_summary, digest_checked
      FROM cluster
-     WHERE created_at > ? AND has_primary = 0 AND right_outlet_count >= 2 AND last_article_at > ?
+     WHERE mode_id = ${NEWS_MODE_ID} AND created_at > ? AND has_primary = 0 AND right_outlet_count >= 2 AND last_article_at > ?
        AND (digest_status IS NULL OR digest_status = 'qualified')
      ORDER BY right_outlet_count DESC, last_article_at DESC`,
     [now - 5 * DAY, now - 36 * HOUR],
@@ -524,7 +541,7 @@ export async function stepDigest(d: StepDeps): Promise<string> {
   if (!clusters.length) return 'no candidate stories';
   const prim = await d.db.all<any>(
     `SELECT a.id, a.title, a.embedding FROM article a
-     JOIN source src ON src.id = a.source_id AND src.role = 'primary' AND src.enabled = 1
+     JOIN source src ON src.id = a.source_id AND src.role = 'primary' AND src.enabled = 1 AND src.mode_id = ${NEWS_MODE_ID}
      WHERE a.embedding IS NOT NULL AND a.published_at > ?`,
     [now - CLUSTER_WINDOW],
   );
@@ -667,6 +684,7 @@ export async function stepRetention(d: StepDeps, removeFiles?: (articleIds: numb
         DELETE FROM match_pair WHERE primary_article_id IN (${chunk}) OR other_article_id IN (${chunk});
         DELETE FROM story_article WHERE article_id IN (${chunk});
         DELETE FROM article_summary WHERE article_id IN (${chunk});
+        DELETE FROM article_mention WHERE article_id IN (${chunk});
       `);
     }
     await d.db.run('DELETE FROM briefing WHERE created_at < ?', [cutoff]);

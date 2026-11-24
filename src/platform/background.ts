@@ -5,6 +5,7 @@ import { getDb } from './db';
 import { runRefresh } from './runner';
 
 export const REFRESH_TASK = 'news-refresh';
+const BACKGROUND_BUDGET_MS = 6 * 60_000;
 
 // Defined at module scope so the task exists when the system starts the app headless.
 // WorkManager runs it on Android and BGTaskScheduler on iOS; the system decides when.
@@ -13,11 +14,15 @@ TaskManager.defineTask(REFRESH_TASK, async () => {
   const sub = BackgroundTask.addExpirationListener(() => {
     stop = true;
   });
+  // Android ends a background job after about ten minutes. Stop starting new steps (and new
+  // prefetches) well before that, so the run is recorded as finished rather than killed.
+  const started = Date.now();
+  const shouldStop = () => stop || Date.now() - started > BACKGROUND_BUDGET_MS;
   try {
     const db = await getDb();
     const settings = await loadSettings(db);
     if (!settings.setupDone) return BackgroundTask.BackgroundTaskResult.Success;
-    await runRefresh('background', () => stop);
+    await runRefresh('background', shouldStop);
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;

@@ -1,16 +1,17 @@
 import type { Db } from '../db/db';
 import { placeholders } from '../db/db';
 import {
-  BASELINE_RATIO, HIDING_KINDS, applySignal, finalScore, goodFits, importance, loadStats, lowerReasons, preferencePart,
+  BASELINE_RATIO, HIDING_KINDS, applySignal, finalScore, goodFits, importance, loadStats, lowerReasons, preferencePart, relativeMatch,
 } from './ranking';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { isRightLeaning } from './sources';
+import { readEstimate } from './learning';
 import { loadTopicFilter } from './topics';
 import {
-  DAY, HOUR,
+  DAY, HOUR, NEWS_MODE_ID,
   type Article, type BubbleItem, type DigestItem, type FeedCard, type InteractionKind, type Lean, type LessReason, type Surface,
 } from './types';
-import { hashString, mulberry32, safeJson } from './util';
+import { safeJson } from './util';
 
 export const SESSION_GAP_MS = 10 * 60_000;
 export const CLUSTER_SUPPRESS_MS = 72 * HOUR;
@@ -197,50 +198,80 @@ async function seenClusters(db: Db, sessionId: string, now: number): Promise<Set
 
 /** What a watched term adds to a card's score: enough to put it among the first cards. */
 export const WATCH_BOOST = 3;
+/** Latest first shows at most this many stories. */
+export const LATEST_LIMIT = 100;
 
 const FEED_SELECT = `SELECT ${ARTICLE_COLS}, s.name source_name, i.first_seen_at seen_at,
             COALESCE(c.outlet_count, 1) outlets,
             (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
             EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested,
+            EXISTS (SELECT 1 FROM interaction v WHERE v.article_id = a.id AND v.kind = 'viewed') opened,
             EXISTS (SELECT 1 FROM story_article sa WHERE sa.article_id = a.id) following`;
 /** An article open for five seconds or more has been read as far as the feeds are concerned. */
 const FEED_HIDING: InteractionKind[] = [...HIDING_KINDS, 'viewed', 'hidden'];
-const NOT_HIDDEN = `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${FEED_HIDING.map((k) => `'${k}'`).join(',')}))`;
+const notHiddenBy = (kinds: InteractionKind[]) =>
+  `NOT EXISTS (SELECT 1 FROM interaction x WHERE x.article_id = a.id AND x.kind IN (${kinds.map((k) => `'${k}'`).join(',')}))`;
+const NOT_HIDDEN = notHiddenBy(FEED_HIDING);
+/** Latest first keeps what has been read; only a card put away by hand (hidden, marked down) goes. */
+const NOT_PUT_AWAY = notHiddenBy(FEED_HIDING.filter((k) => k !== 'viewed'));
 const likeTerm = (t: string) => `%${t.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 const LIKE_ANY = "(a.title LIKE ? ESCAPE '\\' OR a.summary LIKE ? ESCAPE '\\' OR a.tags LIKE ? ESCAPE '\\' OR a.section LIKE ? ESCAPE '\\')";
 
 /**
- * The For you feed: processed articles from enabled primary sources that are unseen, or were first seen in
- * this session (so scrolling back up still works). Cards seen this session keep their place at
- * the top in the order they were seen; the rest are ranked, with exploration slots.
+ * The For you feed. Two settings shape it.
  *
- * Mute and watch lists apply here: an article matching a muted term is left out, and one matching
- * a watched term is lifted to the top. A watched term also brings in perspective-source articles,
- * one per story, when no primary source in the feed is carrying that story.
+ * Normally (seen rule): processed articles from enabled primary sources that are unseen, or were
+ * first seen in this session (so scrolling back up still works). Cards seen this session keep
+ * their place at the top in the order they were seen; the rest follow in order (see below).
+ *
+ * Latest first (settings.chronological): the seen rule is off. The newest stories, up to
+ * LATEST_LIMIT, newest at the top, whether or not they have been on screen or read; only those put
+ * away by hand (hidden, not interested, less like this) go. Filtered, the 100 best matches, best
+ * first; unfiltered, simply the newest 100, newest first.
+ *
+ * Every card carries `match`: how well it suits him against the other stories on offer, 5 to 95.
+ *
+ * Filtered (the default): sorted by match, watched topics first. Stories whose match is below
+ * settings.filterThreshold are left out, except watched ones and (seen rule) cards already seen this
+ * session, which keep their place. There are no exploration slots: the Outside tab does that job.
+ *
+ * Unfiltered (settings.unfiltered): what has been learned decides nothing. The feed is ordered on
+ * news value alone (freshness and how widely it is covered), or by time with Latest first.
+ *
+ * Mute and watch lists apply in every mode: an article matching a muted term is left out, and one
+ * matching a watched term is lifted to the top (ranked feed). A watched term also brings in
+ * perspective-source articles, one per story, when no primary source in the feed is carrying that story.
  */
 export async function loadFeed(db: Db, settings: Settings, sessionId: string, now: number): Promise<FeedCard[]> {
+  const latest = settings.chronological;
+  const unfiltered = settings.unfiltered;
+  // Unfiltered, cards are ordered as though nothing had been learned.
+  const rankSettings = unfiltered ? { ...settings, weightA: 0, weightS: 0 } : settings;
   const topics = await loadTopicFilter(db, now);
+  const visible = latest
+    ? `a.published_at > ? AND ${NOT_PUT_AWAY}`
+    : `((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface NOT IN ('bubble', 'coverage'))) AND ${NOT_HIDDEN}`;
+  const visibleParams = latest ? [now - FEED_WINDOW_MS] : [now - FEED_WINDOW_MS, sessionId];
   const rows = await db.all<any>(
     `${FEED_SELECT}
      FROM article a
-     JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
+     JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1 AND s.mode_id = ${NEWS_MODE_ID}
      LEFT JOIN cluster c ON c.id = a.cluster_id
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN read_later rl ON rl.article_id = a.id
-     WHERE a.ready_at IS NOT NULL
-       AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface NOT IN ('bubble', 'coverage')))
-       AND ${NOT_HIDDEN}`,
-    [now - FEED_WINDOW_MS, sessionId],
+     WHERE a.ready_at IS NOT NULL AND ${visible}`,
+    visibleParams,
   );
   const cards = new Map<number, FeedCard>();
   const addCard = (r: any, article: Article, watch: string | null) => {
+    const prefs = { a: article.scoreA, s: article.scoreS };
     cards.set(article.id, {
       article,
       sourceName: r.source_name,
-      score: finalScore({ a: article.scoreA, s: article.scoreS, i: article.scoreI, publishedAt: article.publishedAt }, settings, now)
+      score: finalScore({ ...prefs, i: article.scoreI, publishedAt: article.publishedAt }, rankSettings, now)
         + (watch ? WATCH_BOOST : 0),
       explore: false,
-      seenAt: r.seen_at ?? null,
+      seenAt: latest ? null : (r.seen_at ?? null),
       saved: !!r.saved,
       interested: !!r.interested,
       goodFit: false,
@@ -248,6 +279,8 @@ export async function loadFeed(db: Db, settings: Settings, sessionId: string, no
       outletCount: r.outlets ?? 1,
       watch,
       following: !!r.following,
+      match: null,
+      opened: !!r.opened,
     });
   };
   const primaryClusters = new Set<number>();
@@ -259,29 +292,32 @@ export async function loadFeed(db: Db, settings: Settings, sessionId: string, no
   }
   if (topics.watchTerms.length) {
     // Watched terms reach into the perspective sources too. SQL narrows by substring; the whole-word
-    // test decides. A story a primary card already carries, or one seen in an earlier session, is skipped.
+    // test decides. A story a primary card already carries, or (seen rule) one seen in an earlier
+    // session, is skipped.
     const params = topics.watchTerms.flatMap((t) => [likeTerm(t), likeTerm(t), likeTerm(t), likeTerm(t)]);
+    const extraVisible = latest
+      ? `a.published_at > ? AND ${NOT_PUT_AWAY}`
+      : `((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface = 'feed')) AND ${NOT_HIDDEN}`;
     const extra = await db.all<any>(
       `${FEED_SELECT}
        FROM article a
-       JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1
+       JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1 AND s.mode_id = ${NEWS_MODE_ID}
        LEFT JOIN cluster c ON c.id = a.cluster_id
        LEFT JOIN impression i ON i.article_id = a.id
        LEFT JOIN read_later rl ON rl.article_id = a.id
-       WHERE a.ready_at IS NOT NULL
-         AND ((i.article_id IS NULL AND a.published_at > ?) OR (i.session_id = ? AND i.surface = 'feed'))
-         AND ${NOT_HIDDEN} AND (${topics.watchTerms.map(() => LIKE_ANY).join(' OR ')})
+       WHERE a.ready_at IS NOT NULL AND ${extraVisible} AND (${topics.watchTerms.map(() => LIKE_ANY).join(' OR ')})
        ORDER BY (i.article_id IS NULL), a.published_at DESC`,
-      [now - FEED_WINDOW_MS, sessionId, ...params],
+      [...visibleParams, ...params],
     );
-    const suppressed = extra.length ? await seenClusters(db, sessionId, now) : new Set<number>();
+    const suppressed = extra.length && !latest ? await seenClusters(db, sessionId, now) : new Set<number>();
     const taken = new Set<number>();
     for (const r of extra) {
       const article = rowToArticle(r);
       const watch = topics.watched(article);
       if (!watch || topics.muted(article)) continue;
       const cid = article.clusterId;
-      if (r.seen_at == null && cid != null && (primaryClusters.has(cid) || suppressed.has(cid) || taken.has(cid))) continue;
+      const fresh = latest || r.seen_at == null;
+      if (fresh && cid != null && (primaryClusters.has(cid) || suppressed.has(cid) || taken.has(cid))) continue;
       if (cid != null) taken.add(cid);
       // Scoring covers primary and Right press articles only; one it has not reached counts as an
       // article with no history, not (score 0) as one strongly liked.
@@ -295,31 +331,48 @@ export async function loadFeed(db: Db, settings: Settings, sessionId: string, no
   const all = Array.from(cards.values());
   const fits = goodFits(all.map((c) => preferencePart({ a: c.article.scoreA, s: c.article.scoreS }, settings, now)));
   all.forEach((c, i) => { c.goodFit = fits[i]; });
-  const seen = all.filter((c) => c.seenAt != null).sort((a, b) => a.seenAt! - b.seenAt! || a.article.id - b.article.id);
-  const unseen = all.filter((c) => c.seenAt == null).sort((a, b) => b.score - a.score).slice(0, FEED_LIMIT);
-
-  const secRows = await db.all<{ feature_key: string; positive_weight: number }>(
-    "SELECT feature_key, positive_weight FROM feature_stat WHERE feature_key LIKE 'section:%'",
-  );
-  const sectionPositive = new Map(secRows.map((r) => [r.feature_key.slice(8), r.positive_weight]));
-  const order = buildFeedOrder(
-    unseen.map((c) => ({ id: c.article.id, score: c.score, section: c.article.section, publishedAt: c.article.publishedAt })),
-    sectionPositive,
-    mulberry32(hashString(sessionId)),
-  );
-  const result = seen.slice();
-  for (const o of order) {
-    const c = cards.get(o.id)!;
-    c.explore = o.explore;
-    result.push(c);
+  // Match: against every story on offer, so a card's figure does not depend on the scroll position.
+  // Shown on every card. Undamped: the cold start only softens the unfiltered news-value order.
+  const undamped = { ...settings, coldStartFactor: 1 };
+  const matches = relativeMatch(all.map((c) => preferencePart({ a: c.article.scoreA, s: c.article.scoreS }, undamped, now)));
+  all.forEach((c, i) => { c.match = matches[i]; });
+  const threshold = unfiltered ? 0 : settings.filterThreshold;
+  if (threshold > 0) {
+    const keep = all.filter((c) => c.match! >= threshold || c.watch || c.seenAt != null);
+    for (const c of all) if (!keep.includes(c)) cards.delete(c.article.id);
+    all.length = 0;
+    all.push(...keep);
   }
+  // Filtered order: best match first (watched topics above all), the newer of two equal matches first.
+  const byMatch = (a: FeedCard, b: FeedCard) =>
+    (b.watch ? 1 : 0) - (a.watch ? 1 : 0) || b.match! - a.match! || b.article.publishedAt - a.article.publishedAt || b.article.id - a.article.id;
+  const byTime = (a: FeedCard, b: FeedCard) => b.article.publishedAt - a.article.publishedAt || b.article.id - a.article.id;
+
+  if (latest) {
+    // Filtered: the best matches among the recent stories, best first. Unfiltered: the newest, newest first.
+    const result = all.sort(unfiltered ? byTime : byMatch).slice(0, LATEST_LIMIT);
+    await attachSecondSources(db, result, sessionId, now, true);
+    return result;
+  }
+
+  // Seen this session: kept in the order seen, at the top. The rest: by match (filtered) or on news
+  // value (unfiltered).
+  const seen = all.filter((c) => c.seenAt != null).sort((a, b) => a.seenAt! - b.seenAt! || a.article.id - b.article.id);
+  const unseen = all.filter((c) => c.seenAt == null)
+    .sort(unfiltered ? (a, b) => b.score - a.score || byTime(a, b) : byMatch)
+    .slice(0, FEED_LIMIT);
+  const result = [...seen, ...unseen];
   await attachSecondSources(db, result, sessionId, now);
   return result;
 }
 
-async function attachSecondSources(db: Db, cards: FeedCard[], sessionId: string, now: number): Promise<void> {
+/**
+ * The second-source strip under each card. Under the seen rule a strip seen in an earlier session,
+ * or one whose story was, is not shown again; Latest first (`keepSeen`) always shows it.
+ */
+async function attachSecondSources(db: Db, cards: FeedCard[], sessionId: string, now: number, keepSeen = false): Promise<void> {
   if (!cards.length) return;
-  const suppressed = await seenClusters(db, sessionId, now);
+  const suppressed = keepSeen ? new Set<number>() : await seenClusters(db, sessionId, now);
   const byId = new Map(cards.map((c) => [c.article.id, c]));
   const ids = cards.map((c) => c.article.id);
   for (let i = 0; i < ids.length; i += 400) {
@@ -336,9 +389,11 @@ async function attachSecondSources(db: Db, cards: FeedCard[], sessionId: string,
     for (const r of rows) {
       const card = byId.get(r.pid);
       if (!card) continue;
-      // Seen in an earlier session, or its story already seen: the strip is not shown again.
-      if (r.seen_session && r.seen_session !== sessionId) continue;
-      if (card.seenAt == null && r.cluster_id != null && suppressed.has(r.cluster_id)) continue;
+      if (!keepSeen) {
+        // Seen in an earlier session, or its story already seen: the strip is not shown again.
+        if (r.seen_session && r.seen_session !== sessionId) continue;
+        if (card.seenAt == null && r.cluster_id != null && suppressed.has(r.cluster_id)) continue;
+      }
       card.second = { articleId: r.oid, sourceName: r.name, angleNote: r.angle_note ?? null };
     }
   }
@@ -354,9 +409,9 @@ export async function loadDigest(db: Db, settings: Settings, sessionId: string, 
             NOT ${NOT_HIDDEN} hidden
      FROM cluster c
      JOIN article a ON a.cluster_id = c.id
-     JOIN source s ON s.id = a.source_id AND s.enabled = 1 AND s.role = 'perspective'
+     JOIN source s ON s.id = a.source_id AND s.enabled = 1 AND s.role = 'perspective' AND s.mode_id = ${NEWS_MODE_ID}
      LEFT JOIN impression i ON i.article_id = a.id
-     WHERE c.digest_status = 'qualified' AND c.has_primary = 0 AND c.right_outlet_count >= 2
+     WHERE c.mode_id = ${NEWS_MODE_ID} AND c.digest_status = 'qualified' AND c.has_primary = 0 AND c.right_outlet_count >= 2
        AND c.last_article_at > ?
      ORDER BY a.published_at DESC`,
     [now - DIGEST_WINDOW_MS],
@@ -479,7 +534,7 @@ export async function loadBubble(db: Db, settings: Settings, sessionId: string, 
             (rl.article_id IS NOT NULL AND rl.done_at IS NULL) saved,
             EXISTS (SELECT 1 FROM interaction m WHERE m.article_id = a.id AND m.kind = 'interested') interested
      FROM article a
-     JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1
+     JOIN source s ON s.id = a.source_id AND s.role = 'primary' AND s.enabled = 1 AND s.mode_id = ${NEWS_MODE_ID}
      LEFT JOIN cluster c ON c.id = a.cluster_id
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN read_later rl ON rl.article_id = a.id
@@ -569,10 +624,26 @@ async function logInteraction(
   );
 }
 
-/** Opening counts as seeing (History must list it) and is logged for learning. */
+/**
+ * Opening counts as seeing (History must list it) and is logged for learning. In a sections-layout
+ * mode the first open of an article is itself a signal (News learns from reading, not opening).
+ */
 export async function recordOpen(db: Db, articleId: number, sessionId: string, surface: Surface, now: number): Promise<void> {
   await recordImpressions(db, [{ articleId, surface }], sessionId, now);
+  const first = !(await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'open'", [articleId]));
   await logInteraction(db, articleId, 'open', now);
+  if (first) await applySignal(db, articleId, 'open', now);
+}
+
+/**
+ * Sections layout: opened one of the other sources behind a card's "+N more". The signal goes on
+ * the card's story; the other article is opened as coverage (it is not a card of its own).
+ */
+export async function recordOpenMore(db: Db, cardArticleId: number, otherArticleId: number, sessionId: string, now: number): Promise<void> {
+  await recordImpressions(db, [{ articleId: cardArticleId, surface: 'feed' }, { articleId: otherArticleId, surface: 'coverage' }], sessionId, now);
+  if (await db.get("SELECT 1 x FROM interaction WHERE article_id = ? AND kind = 'open_more'", [cardArticleId])) return;
+  await logInteraction(db, cardArticleId, 'open_more', now);
+  await applySignal(db, cardArticleId, 'open_more', now);
 }
 
 export const READ_SCROLL_PCT = 60;
@@ -598,7 +669,12 @@ export function classifyReading(dwellSeconds: number, maxScrollPct: number): 're
 export async function recordReading(
   db: Db, articleId: number, dwellSeconds: number, maxScrollPct: number, now: number,
 ): Promise<{ kind: 'read' | 'bounce' | null; done: boolean; viewed: boolean }> {
-  const kind = classifyReading(dwellSeconds, maxScrollPct);
+  // A sections-layout mode counts a read as reaching the end, or staying for 60% of the estimated
+  // read time; the five-second floor applies as in News. It has no bounce signal.
+  const est = await readEstimate(db, articleId);
+  const kind = est
+    ? (dwellSeconds >= 5 && (maxScrollPct >= 90 || (est.seconds > 0 && dwellSeconds >= est.fraction * est.seconds)) ? 'read' : null)
+    : classifyReading(dwellSeconds, maxScrollPct);
   if (kind) {
     const already = await db.get('SELECT 1 x FROM interaction WHERE article_id = ? AND kind = ?', [articleId, kind]);
     await logInteraction(db, articleId, kind, now, dwellSeconds, maxScrollPct);
@@ -737,17 +813,19 @@ export interface ListRow {
   offline: boolean;
 }
 
-export async function loadReadLater(db: Db): Promise<ListRow[]> {
+/** One mode's Read later list (News unless another mode is named). */
+export async function loadReadLater(db: Db, modeId: number = NEWS_MODE_ID): Promise<ListRow[]> {
   const rows = await db.all<any>(
     `SELECT ${ARTICLE_COLS}, s.name source_name, rl.saved_at at
      FROM read_later rl JOIN article a ON a.id = rl.article_id LEFT JOIN source s ON s.id = a.source_id
-     WHERE rl.done_at IS NULL ORDER BY rl.saved_at DESC`,
+     WHERE rl.done_at IS NULL AND a.mode_id = ? ORDER BY rl.saved_at DESC`,
+    [modeId],
   );
   return rows.map((r) => ({ article: rowToArticle(r), sourceName: r.source_name ?? '', at: r.at, offline: !!r.has_body }));
 }
 
-/** Everything seen in the last 14 days (and finished Read later items), newest first. */
-export async function loadHistory(db: Db, now: number, search = '', limit = 300): Promise<ListRow[]> {
+/** Everything seen in one mode in the last 14 days (and finished Read later items), newest first. */
+export async function loadHistory(db: Db, now: number, search = '', limit = 300, modeId: number = NEWS_MODE_ID): Promise<ListRow[]> {
   const q = search.trim();
   const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
   const rows = await db.all<any>(
@@ -756,10 +834,10 @@ export async function loadHistory(db: Db, now: number, search = '', limit = 300)
      LEFT JOIN impression i ON i.article_id = a.id
      LEFT JOIN read_later rl ON rl.article_id = a.id AND rl.done_at IS NOT NULL
      LEFT JOIN source s ON s.id = a.source_id
-     WHERE (i.first_seen_at > ? OR rl.done_at > ?)
+     WHERE a.mode_id = ? AND (i.first_seen_at > ? OR rl.done_at > ?)
        ${q ? "AND a.title LIKE ? ESCAPE '\\'" : ''}
      ORDER BY at DESC, a.id DESC LIMIT ?`,
-    q ? [now - 14 * DAY, now - 14 * DAY, like, limit] : [now - 14 * DAY, now - 14 * DAY, limit],
+    q ? [modeId, now - 14 * DAY, now - 14 * DAY, like, limit] : [modeId, now - 14 * DAY, now - 14 * DAY, limit],
   );
   return rows.map((r) => ({ article: rowToArticle(r), sourceName: r.source_name ?? '', at: r.at, offline: !!r.has_body }));
 }
@@ -771,7 +849,7 @@ export async function loadHistory(db: Db, now: number, search = '', limit = 300)
 export async function loadMore(db: Db, limit = 300): Promise<ListRow[]> {
   const rows = await db.all<any>(
     `SELECT ${ARTICLE_COLS}, s.name source_name, a.published_at at
-     FROM article a JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1
+     FROM article a JOIN source s ON s.id = a.source_id AND s.role = 'perspective' AND s.enabled = 1 AND s.mode_id = ${NEWS_MODE_ID}
      ORDER BY a.published_at DESC, a.id DESC LIMIT ?`,
     [limit],
   );

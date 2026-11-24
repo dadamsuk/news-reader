@@ -2,6 +2,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { splitEndpoints } from '../core/sources';
 import type { FetchFn, RawItem, Source, Tone } from '../core/types';
 import { countWords, decodeEntities, stripHtml } from '../core/util';
+import { fetchHn, fetchHtmlList, splitDigests } from './sections';
 
 export interface AdapterCtx {
   fetch: FetchFn;
@@ -13,7 +14,8 @@ export interface AdapterCtx {
   maxPages?: number;
 }
 
-type AdapterSource = Pick<Source, 'adapter' | 'endpoint' | 'name' | 'includeSections' | 'excludeSections'>;
+type AdapterSource = Pick<Source, 'adapter' | 'endpoint' | 'name' | 'includeSections' | 'excludeSections'>
+  & Partial<Pick<Source, 'isDigest' | 'config'>>;
 
 const xml = new XMLParser({
   ignoreAttributes: false,
@@ -145,6 +147,7 @@ export function parseFeed(xmlText: string): RawItem[] {
         byline: stripHtml(text(it['dc:creator']) || text(it.author)) || undefined,
         wordCount: content ? countWords(stripHtml(content)) : undefined,
         adapterBody: content && stripHtml(content).length > 600 ? content : undefined,
+        contentHtml: content || descHtml || undefined,
       });
     }
     return out;
@@ -173,6 +176,7 @@ export function parseFeed(xmlText: string): RawItem[] {
         byline: stripHtml(text(e.author?.name ?? arr<any>(e.author)[0]?.name)) || undefined,
         wordCount: content ? countWords(stripHtml(content)) : undefined,
         adapterBody: content && stripHtml(content).length > 600 ? content : undefined,
+        contentHtml: content || summaryHtml || undefined,
       });
     }
     return out;
@@ -364,10 +368,18 @@ export async function fetchSource(source: AdapterSource, ctx: AdapterCtx): Promi
     case 'google_news_search':
       items = await fetchGoogleNews(source, ctx);
       break;
+    case 'hn_api':
+      items = await fetchHn(splitEndpoints(source.endpoint), source.config ?? {}, ctx);
+      break;
+    case 'html_list':
+      items = await fetchHtmlList(splitEndpoints(source.endpoint), source.config ?? {}, ctx);
+      break;
     default:
       throw new Error(`Unknown adapter: ${String((source as any).adapter)}`);
   }
   const partial = (items as any).partialError as Error | undefined;
+  // A digest issue links to many stories: one item per story, never one item per issue.
+  if (source.isDigest) items = await splitDigests(items, source.config ?? {}, ctx);
   const filtered = items.filter(
     (it) =>
       passesSectionFilter(it, source.includeSections, source.excludeSections) &&
