@@ -366,7 +366,7 @@ marked **check** are those most worth a second look.
   AI mode adds steps only when it has an enabled source, which no earlier test has.
 - **Live, in Node, with the real default sources and OpenRouter** (`test/live-ai.test.ts`): see
   "Live result" below.
-- **Emulator and Maestro**: see "On the emulator" below.
+- **Emulator and Maestro: not finished.** The E2E build installs and flow `07-modes` gets through setup, the mode bar and switching mode, then fails waiting for the AI feed after pull-to-refresh. Flows 01 to 06 and live data on the emulator have not been run. See [handoff-modes.md](handoff-modes.md).
 
 ### Data and migration
 
