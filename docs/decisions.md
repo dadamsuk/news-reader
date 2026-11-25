@@ -366,7 +366,8 @@ marked **check** are those most worth a second look.
   AI mode adds steps only when it has an enabled source, which no earlier test has.
 - **Live, in Node, with the real default sources and OpenRouter** (`test/live-ai.test.ts`): see
   "Live result" below.
-- **Emulator and Maestro: not finished.** The E2E build installs and flow `07-modes` gets through setup, the mode bar and switching mode, then fails waiting for the AI feed after pull-to-refresh. Flows 01 to 06 and live data on the emulator have not been run. See [handoff-modes.md](handoff-modes.md).
+- **Emulator and Maestro: all seven flows pass** with the mock server. See "On the emulator" at
+  the end of this section. Live data on the emulator has not been run yet.
 
 ### Data and migration
 
@@ -521,3 +522,22 @@ the section on this sample. It is `otherNewsMinSignificance` in the mode's setti
 
 **Check: the cold start lets most stories into the main section**: 191 of 234 passed relevance 0.4
 (0.6 × match + 0.4 × 0.5 needs a match of only 0.33). It is the PRD's value, and Show more pages it.
+
+### On the emulator (24 November 2026)
+
+**All seven flows pass**: `7/7 Flows Passed in 8m 46s` (`maestro test .maestro`), on the E2E
+release build against the mock server. Jest is unchanged: 195 pass, 3 skip.
+
+**Bug fixed: pull-to-refresh in the AI mode lost its best stories.** `SectionsFeed.onPull` awaits
+the whole refresh (the AI steps run after News is ready) and only then starts the new session. In
+the meantime the feed reloaded on every data bump, at the end of the run too, so the top-ranked
+cards were shown and counted as seen in the *old* session, and the new session then dropped them
+as seen before. On the mock that removed exactly the top four (the coding agent going GA, two
+pipeline notes and the pairing study), and the feed opened on the lower-ranked filler. The fix: the
+sections feed ignores data bumps while a pull runs and reloads once, after the new session starts
+(`pullingRef` in `src/ui/SectionsFeed.tsx`). News is not affected: its pull resolves at the Score
+step, through `onReady`.
+
+**Flow change: `07-modes` no longer expects the News story it saw before the AI pull.** A session is
+app-wide and pull-to-refresh ends it (spec.md), so after pulling in the AI mode, News's cards seen
+earlier are gone, as they should be. The step now checks that News and its tabs are back.

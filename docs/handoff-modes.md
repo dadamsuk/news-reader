@@ -35,6 +35,10 @@ All seven steps of the brief are built and committed on `main`:
   OpenRouter. All 14 sources were fetched, giving 234 stories; 229 were enriched in 47 calls in
   about 80 seconds, costing **$0.24**.
 
+> **Update, later on 24 November:** steps 2 to 4 below are done. The `07-modes` failure was a bug in
+> the AI feed's pull-to-refresh (fixed), and all seven Maestro flows now pass. See "On the emulator"
+> in decisions.md §15. Still open: step 5 (live data on the emulator) and step 7.
+
 ## Not verified yet: the emulator and Maestro
 
 - **E2E build.** An E2E release APK was built and installed on the `newsreader` emulator.

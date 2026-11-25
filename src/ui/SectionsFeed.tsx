@@ -236,7 +236,11 @@ export function SectionsFeed({ modeId }: { modeId: number }) {
     setNow(at);
   }, [modeId]);
 
+  // While a pull runs, the list stays as it is: cards shown in the old session would count as seen
+  // there and be gone from the new one. onPull reloads once the new session has started.
+  const pullingRef = useRef(false);
   useEffect(() => {
+    if (pullingRef.current) return;
     reload().catch(() => setView((v) => v ?? { sections: [], unseen: 0, settings: null as any }));
   }, [reload, sessionVersion, dataVersion]);
 
@@ -364,13 +368,16 @@ export function SectionsFeed({ modeId }: { modeId: number }) {
   // Pull to refresh: fetch again, then a new session from the top once this mode's stories are ready.
   const onPull = useCallback(async () => {
     setPulling(true);
+    pullingRef.current = true;
     try {
+      // The AI steps run after News is ready, so wait for the whole refresh.
       await runRefresh('manual');
       await startSession(true);
-      await reload();
     } finally {
+      pullingRef.current = false;
       setPulling(false);
     }
+    await reload();
   }, [reload]);
 
   const renderRow = useCallback(({ item }: { item: Row }) => {

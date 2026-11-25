@@ -46,7 +46,10 @@ appId: net.dsc.newsreader
     id: "tab-feed"
 - tapOn:
     id: "mode-news"
-- assertVisible: "Chancellor raises income tax threshold in autumn budget"
+# Back in News, with its tabs. (Its earlier cards are gone: the pull in AI started a new session,
+# and a session is app-wide.)
+- assertVisible:
+    id: "feedtab-foryou"
 - tapOn:
     id: "tab-history"
 - assertNotVisible: "Lab publishes study of AI pair programming at 40 companies"
