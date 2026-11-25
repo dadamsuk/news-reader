@@ -3,6 +3,7 @@ import { Redirect } from 'expo-router';
 import { Tabs } from 'expo-router/js-tabs';
 import React from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { NEWS_MODE_ID } from '../../core/types';
 import { useStore } from '../../state/store';
 import { useTheme } from '../../ui/theme';
 
@@ -10,6 +11,8 @@ export default function TabsLayout() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const setupDone = useStore((s) => s.settings.setupDone);
+  // Pulse covers the News mode only, so its tab is hidden in every other mode.
+  const newsMode = useStore((s) => s.settings.currentModeId === NEWS_MODE_ID);
   if (!setupDone) return <Redirect href="/setup" />;
   const icon = (name: keyof typeof Ionicons.glyphMap) =>
     function TabIcon({ color, size }: { color: any; size: number }) {
@@ -28,7 +31,7 @@ export default function TabsLayout() {
     >
       {/* Tapping Feed while it is showing opens the category list (see the feed screen). */}
       <Tabs.Screen name="index" options={{ title: 'Feed', tabBarIcon: icon('newspaper-outline'), tabBarButtonTestID: 'tab-feed' }} />
-      <Tabs.Screen name="pulse" options={{ title: 'Pulse', tabBarIcon: icon('pulse-outline'), tabBarButtonTestID: 'tab-pulse' }} />
+      <Tabs.Screen name="pulse" options={{ href: newsMode ? undefined : null, title: 'Pulse',tabBarIcon: icon('pulse-outline'), tabBarButtonTestID: 'tab-pulse' }} />
       <Tabs.Screen name="later"options={{ title: 'Read later', tabBarIcon: icon('bookmark-outline'), tabBarButtonTestID: 'tab-later' }} />
       <Tabs.Screen name="history" options={{ title: 'History', tabBarIcon: icon('time-outline'), tabBarButtonTestID: 'tab-history' }} />
       <Tabs.Screen name="settings" options={{ title: 'Settings', tabBarIcon: icon('settings-outline'), tabBarButtonTestID: 'tab-settings' }} />

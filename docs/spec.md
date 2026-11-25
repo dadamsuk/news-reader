@@ -291,7 +291,7 @@ Haiku 4.5 is listed on OpenRouter at [$1 per million input tokens and $5 per mil
 5. **Settings**: OpenRouter key; Sources (list with health dots, then a form per source for every field in the source record, plus Test, Add, Duplicate, Delete, and JSON import and export); second-source preference; model IDs; monthly budget and spend so far; refresh interval; Wi-Fi-only prefetch; text size; ranking weights and thresholds; Reset learning; Export database (shares the SQLite file); Debug. The Sources and Learning tabs have a mode picker at the top and show that mode's sources and learning; General, AI and budget, and Data are shared.
 6. **Debug**: last 20 refresh runs with per-step timing and errors; recent clusters with member articles and similarity scores; recent match and digest decisions with the LLM's JSON.
 
-Bottom tabs: Feed, Pulse, Read later, History, Settings. Feed, Read later and History show the current mode; Pulse covers News only. There is no title bar. Settings is split into tabs: General, Sources, AI and budget, Learning, Data. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
+Bottom tabs: Feed, Pulse, Read later, History, Settings. Feed, Read later and History show the current mode; Pulse covers News only, and its tab is hidden in other modes. There is no title bar. Settings is split into tabs: General, Sources, AI and budget, Learning, Data. Layout and gestures are identical on Android and iOS; platform differences are limited to the in-app browser and system share sheet.
 
 ## Acceptance criteria
 

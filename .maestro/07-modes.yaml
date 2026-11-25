@@ -17,11 +17,13 @@ appId: net.dsc.newsreader
     id: "feedtab-foryou"
 - assertVisible: "Chancellor raises income tax threshold in autumn budget"
 
-# The AI mode: no News tabs, its own sections.
+# The AI mode: no News tabs and no Pulse, its own sections.
 - tapOn:
     id: "mode-ai"
 - assertNotVisible:
     id: "feedtab-foryou"
+- assertNotVisible:
+    id: "tab-pulse"
 - swipe:
     start: 50%, 40%
     end: 50%, 85%
